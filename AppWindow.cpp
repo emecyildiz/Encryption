@@ -290,6 +290,8 @@ void AppWindow::setupImGui() {
         0x011E, 0x011F,
         0x0130, 0x0131,
         0x015E, 0x015F,
+        0x2022, 0x2022,
+        0x2713, 0x2713,
         0
     };
     if (std::filesystem::exists("C:/Windows/Fonts/segoeui.ttf")) {
@@ -676,7 +678,14 @@ void AppWindow::renderSourceList() {
                         item_removed = true;
                     }
                 }
-                ImGui::SetCursorScreenPos(ImVec2(row_start.x, row_start.y + item_step));
+                // Advance through a submitted item instead of changing the cursor directly.
+                // ImGui 1.92 asserts when SetCursorPos extends a child window without a
+                // following item, and the list clipper also relies on a stable row height.
+                const float target_y = row_start.y + item_step;
+                const float current_y = ImGui::GetCursorScreenPos().y;
+                const float spacer_height = std::max(
+                    0.0f, target_y - current_y - ImGui::GetStyle().ItemSpacing.y);
+                ImGui::Dummy(ImVec2(0.0f, spacer_height));
                 ImGui::PopID();
                 if (item_removed) break;
             }
@@ -765,7 +774,7 @@ void AppWindow::renderOutputList() {
         ImGui::EndGroup();
         if (item.status == ItemStatus::PENDING_SAVE && !processing) {
             ImGui::SameLine(ImGui::GetContentRegionMax().x - 105.0f);
-            if (ImGui::Button("Kaydet...")) saveOutput(index);
+            if (ImGui::Button("Save...")) saveOutput(index);
         } else if (item.status == ItemStatus::SAVED) {
             ImGui::SameLine(ImGui::GetContentRegionMax().x - 135.0f);
             if (ImGui::SmallButton("Show in Folder")) {
