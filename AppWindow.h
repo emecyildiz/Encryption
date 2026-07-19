@@ -69,9 +69,19 @@ private:
     std::atomic<bool> cancel_requested {false};
     std::atomic<std::size_t> processed_count {0};
     std::atomic<std::size_t> total_count {0};
+    std::atomic<std::size_t> failed_count {0};
     mutable std::mutex state_mutex;
     std::string current_file;
     std::string notice;
+    bool failure_modal_pending = false;
+    std::string failure_modal_title;
+    std::string failure_modal_message;
+    bool success_modal_pending = false;
+    std::string success_modal_title;
+    std::string success_modal_message;
+    bool mixed_folder_modal_pending = false;
+    std::vector<std::filesystem::path> pending_regular_files;
+    std::vector<std::filesystem::path> pending_kasa_files;
 
     void setupImGui();
     void renderUI();
@@ -81,6 +91,9 @@ private:
     void renderOutputPanel();
     void renderSourceList();
     void renderOutputList();
+    void renderFailureModal();
+    void renderSuccessModal();
+    void renderMixedFolderModal();
 
     void setMode(UiMode new_mode);
     void addPath(const std::filesystem::path& path);

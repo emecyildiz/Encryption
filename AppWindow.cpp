@@ -67,6 +67,28 @@ namespace {
         }
     }
 
+    std::string fitTextToWidth(const std::string& text, const float maximum_width) {
+        if (maximum_width <= 0.0f || ImGui::CalcTextSize(text.c_str()).x <= maximum_width) {
+            return text;
+        }
+
+        constexpr std::string_view ellipsis = "...";
+        const float ellipsis_width = ImGui::CalcTextSize(ellipsis.data()).x;
+        if (ellipsis_width >= maximum_width) return std::string(ellipsis);
+
+        std::size_t byte_count = text.size();
+        while (byte_count > 0) {
+            --byte_count;
+            while (byte_count > 0 &&
+                   (static_cast<unsigned char>(text[byte_count]) & 0xC0U) == 0x80U) {
+                --byte_count;
+            }
+            const std::string candidate = text.substr(0, byte_count) + std::string(ellipsis);
+            if (ImGui::CalcTextSize(candidate.c_str()).x <= maximum_width) return candidate;
+        }
+        return std::string(ellipsis);
+    }
+
     std::filesystem::path pathFromUtf8(std::string_view value) {
         const std::u8string utf8(reinterpret_cast<const char8_t*>(value.data()), value.size());
         return std::filesystem::path(utf8);
@@ -392,6 +414,9 @@ void AppWindow::renderUI() {
         renderOutputPanel();
         ImGui::EndTable();
     }
+    renderFailureModal();
+    renderSuccessModal();
+    renderMixedFolderModal();
     ImGui::End();
 }
 
@@ -711,8 +736,15 @@ void AppWindow::renderOutputPanel() {
         ImGui::ProgressBar(fraction, ImVec2(-1, 24));
         std::lock_guard lock(state_mutex);
         ImGui::TextColored(COLOR_MUTED, "%zu / %zu  %s", done, total, current_file.c_str());
-    } else if (!outputs.empty()) {
-        ImGui::BeginDisabled(mode != UiMode::PROTECT);
+    } else if (mode == UiMode::PROTECT) {
+        bool has_pending_output = false;
+        {
+            std::lock_guard lock(state_mutex);
+            has_pending_output = std::any_of(outputs.begin(), outputs.end(), [](const OutputItem& item) {
+                return item.status == ItemStatus::PENDING_SAVE;
+            });
+        }
+        ImGui::BeginDisabled(!has_pending_output);
         ImGui::PushStyleColor(ImGuiCol_Button, COLOR_VIOLET);
         if (ImGui::Button("Save All...")) saveAllOutputs();
         ImGui::PopStyleColor();
@@ -732,12 +764,17 @@ void AppWindow::renderOutputList() {
 
     const ImVec2 list_position = ImGui::GetCursorScreenPos();
     const ImVec2 list_size(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y);
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(list_position, list_position + list_size, IM_COL32(9, 15, 31, 205), 14.0f);
-    draw->AddRect(list_position, list_position + list_size, IM_COL32(69, 86, 127, 110), 14.0f);
+    ImDrawList* parent_draw = ImGui::GetWindowDrawList();
+    parent_draw->AddRectFilled(list_position, list_position + list_size,
+                               IM_COL32(9, 15, 31, 205), 14.0f);
+    parent_draw->AddRect(list_position, list_position + list_size,
+                         IM_COL32(69, 86, 127, 110), 14.0f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("OutputList", list_size, false, ImGuiWindowFlags_NoBackground);
     ImGui::PopStyleColor();
+    // Output rows belong to the child draw list so scrolling clips them at the
+    // list boundary instead of painting over the panel heading and controls.
+    ImDrawList* draw = ImGui::GetWindowDrawList();
     if (snapshot.empty()) {
         const ImVec2 center = list_position + ImVec2(list_size.x * 0.5f, list_size.y * 0.42f);
         draw->AddCircleFilled(center, 46.0f, IM_COL32(112, 73, 226, 25), 48);
@@ -752,40 +789,150 @@ void AppWindow::renderOutputList() {
         ImGui::SetCursorPosX((list_size.x - ImGui::CalcTextSize(secondary).x) * 0.5f);
         ImGui::TextColored(COLOR_MUTED, "%s", secondary);
     }
-    for (std::size_t index = 0; index < snapshot.size(); ++index) {
-        const OutputItem& item = snapshot[index];
-        ImGui::PushID(static_cast<int>(index));
-        const ImVec2 row_start = ImGui::GetCursorScreenPos();
-        draw->AddRectFilled(row_start, row_start + ImVec2(ImGui::GetContentRegionAvail().x, 82.0f),
-                            IM_COL32(24, 34, 59, 240), 12.0f);
-        draw->AddRect(row_start, row_start + ImVec2(ImGui::GetContentRegionAvail().x, 82.0f),
-                      item.status == ItemStatus::FAILED ? IM_COL32(224, 76, 91, 90)
-                                                       : IM_COL32(55, 204, 217, 65), 12.0f);
-        ImGui::Dummy(ImVec2(10, 5));
-        ImGui::SameLine();
-        ImGui::BeginGroup();
-        const ImVec4 status_color = item.status == ItemStatus::FAILED ? COLOR_ERROR
-                                    : item.status == ItemStatus::PENDING_SAVE ? COLOR_WARNING
-                                    : COLOR_SUCCESS;
-        ImGui::TextColored(status_color, "%s", item.status == ItemStatus::FAILED ? "!" : "✓");
-        ImGui::SameLine();
-        ImGui::TextUnformatted(item.display_name.c_str());
-        ImGui::TextColored(COLOR_MUTED, "%s", item.message.c_str());
-        ImGui::EndGroup();
-        if (item.status == ItemStatus::PENDING_SAVE && !processing) {
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - 105.0f);
-            if (ImGui::Button("Save...")) saveOutput(index);
-        } else if (item.status == ItemStatus::SAVED) {
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - 135.0f);
-            if (ImGui::SmallButton("Show in Folder")) {
-                const std::wstring argument = L"/select,\"" + item.output_path.wstring() + L"\"";
-                ShellExecuteW(nullptr, L"open", L"explorer.exe", argument.c_str(), nullptr, SW_SHOWNORMAL);
+    constexpr float item_step = 94.0f;
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(snapshot.size()), item_step);
+    while (clipper.Step()) {
+        for (int visible_index = clipper.DisplayStart;
+             visible_index < clipper.DisplayEnd; ++visible_index) {
+            const std::size_t index = static_cast<std::size_t>(visible_index);
+            const OutputItem& item = snapshot[index];
+            ImGui::PushID(visible_index);
+            const ImVec2 row_start = ImGui::GetCursorScreenPos();
+            const float row_width = ImGui::GetContentRegionAvail().x;
+            draw->AddRectFilled(row_start, row_start + ImVec2(row_width, item_step - 8.0f),
+                                IM_COL32(24, 34, 59, 240), 12.0f);
+            draw->AddRect(row_start, row_start + ImVec2(row_width, item_step - 8.0f),
+                          IM_COL32(55, 204, 217, 65), 12.0f);
+
+            const float action_width = item.status == ItemStatus::PENDING_SAVE ? 120.0f : 155.0f;
+            const float text_width = std::max(90.0f, row_width - action_width - 52.0f);
+            const std::string fitted_name = fitTextToWidth(item.display_name, text_width);
+            const std::string fitted_message = fitTextToWidth(item.message, text_width);
+
+            ImGui::Dummy(ImVec2(10, 7));
+            ImGui::SameLine();
+            ImGui::BeginGroup();
+            const ImVec4 status_color = item.status == ItemStatus::PENDING_SAVE
+                                            ? COLOR_WARNING
+                                            : COLOR_SUCCESS;
+            ImGui::TextColored(status_color, "✓");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(fitted_name.c_str());
+            if (ImGui::IsItemHovered() && fitted_name != item.display_name) {
+                ImGui::SetTooltip("%s", item.display_name.c_str());
             }
+            ImGui::TextColored(COLOR_MUTED, "%s", fitted_message.c_str());
+            if (ImGui::IsItemHovered() && fitted_message != item.message) {
+                ImGui::SetTooltip("%s", item.message.c_str());
+            }
+            ImGui::EndGroup();
+
+            if (item.status == ItemStatus::PENDING_SAVE && !processing) {
+                ImGui::SameLine(ImGui::GetContentRegionMax().x - 105.0f);
+                if (ImGui::Button("Save...")) saveOutput(index);
+            } else if (item.status == ItemStatus::SAVED) {
+                ImGui::SameLine(ImGui::GetContentRegionMax().x - 135.0f);
+                if (ImGui::SmallButton("Show in Folder")) {
+                    const std::wstring argument = L"/select,\"" + item.output_path.wstring() + L"\"";
+                    ShellExecuteW(nullptr, L"open", L"explorer.exe", argument.c_str(), nullptr,
+                                  SW_SHOWNORMAL);
+                }
+            }
+
+            const float target_y = row_start.y + item_step;
+            const float current_y = ImGui::GetCursorScreenPos().y;
+            const float spacer_height = std::max(
+                0.0f, target_y - current_y - ImGui::GetStyle().ItemSpacing.y);
+            ImGui::Dummy(ImVec2(0.0f, spacer_height));
+            ImGui::PopID();
         }
-        ImGui::Dummy(ImVec2(0, 10));
-        ImGui::PopID();
     }
+    clipper.End();
     ImGui::EndChild();
+}
+
+void AppWindow::renderFailureModal() {
+    if (failure_modal_pending) {
+        ImGui::OpenPopup("Operation failed");
+        failure_modal_pending = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(470.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Operation failed", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::TextColored(COLOR_ERROR, "%s", failure_modal_title.c_str());
+        ImGui::Spacing();
+        ImGui::TextWrapped("%s", failure_modal_message.c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("OK", ImVec2(-1.0f, 40.0f))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+void AppWindow::renderSuccessModal() {
+    if (success_modal_pending) {
+        ImGui::OpenPopup("Operation complete");
+        success_modal_pending = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(470.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Operation complete", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::TextColored(COLOR_SUCCESS, "%s", success_modal_title.c_str());
+        ImGui::Spacing();
+        ImGui::TextWrapped("%s", success_modal_message.c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("OK", ImVec2(-1.0f, 40.0f))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+void AppWindow::renderMixedFolderModal() {
+    if (mixed_folder_modal_pending) {
+        ImGui::OpenPopup("Mixed folder detected");
+        mixed_folder_modal_pending = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Mixed folder detected", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::TextWrapped("This folder contains both regular files and .kasa files. "
+                           "Choose which operation you want to perform.");
+        ImGui::Spacing();
+        const std::string protect_label = "Protect regular files (" +
+                                          std::to_string(pending_regular_files.size()) + ")";
+        if (ImGui::Button(protect_label.c_str(), ImVec2(-1.0f, 42.0f))) {
+            const std::vector<std::filesystem::path> selected = pending_regular_files;
+            pending_regular_files.clear();
+            pending_kasa_files.clear();
+            setMode(UiMode::PROTECT);
+            for (const auto& selected_path : selected) addFile(selected_path);
+            ImGui::CloseCurrentPopup();
+        }
+        const std::string unlock_label = "Unlock .kasa files (" +
+                                         std::to_string(pending_kasa_files.size()) + ")";
+        if (ImGui::Button(unlock_label.c_str(), ImVec2(-1.0f, 42.0f))) {
+            const std::vector<std::filesystem::path> selected = pending_kasa_files;
+            pending_regular_files.clear();
+            pending_kasa_files.clear();
+            setMode(UiMode::UNLOCK);
+            for (const auto& selected_path : selected) addFile(selected_path);
+            ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::Button("Cancel", ImVec2(-1.0f, 36.0f))) {
+            pending_regular_files.clear();
+            pending_kasa_files.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void AppWindow::setMode(UiMode new_mode) {
@@ -800,6 +947,7 @@ void AppWindow::handleDroppedPaths(int count, const char** paths) {
     if (processing) return;
     for (int index = 0; index < count; ++index) {
         addPath(pathFromUtf8(paths[index]));
+        if (mixed_folder_modal_pending) break;
     }
 }
 
@@ -810,10 +958,35 @@ void AppWindow::addPath(const std::filesystem::path& path) {
             return;
         }
         if (std::filesystem::is_directory(path)) {
+            std::vector<std::filesystem::path> regular_files;
+            std::vector<std::filesystem::path> kasa_files;
             for (const auto& entry : std::filesystem::recursive_directory_iterator(
                      path, std::filesystem::directory_options::skip_permission_denied)) {
-                if (entry.is_regular_file()) addFile(entry.path());
+                if (!entry.is_regular_file()) continue;
+
+                std::string extension = entry.path().extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(),
+                               [](const unsigned char character) {
+                                   return static_cast<char>(std::tolower(character));
+                               });
+                if (extension == ".kasa") kasa_files.push_back(entry.path());
+                else regular_files.push_back(entry.path());
             }
+
+            // Directory iteration order is unspecified. A mixed folder therefore needs
+            // an explicit choice instead of allowing whichever file appears first to
+            // silently select the workflow.
+            if (sources.empty() && !regular_files.empty() && !kasa_files.empty()) {
+                pending_regular_files = std::move(regular_files);
+                pending_kasa_files = std::move(kasa_files);
+                mixed_folder_modal_pending = true;
+                return;
+            }
+
+            const auto& selected_files = !sources.empty() && mode == UiMode::UNLOCK
+                                             ? kasa_files
+                                             : regular_files.empty() ? kasa_files : regular_files;
+            for (const auto& selected_path : selected_files) addFile(selected_path);
         }
     } catch (const std::filesystem::filesystem_error& error) {
         notice = std::string("File scan failed: ") + error.what();
@@ -897,6 +1070,7 @@ void AppWindow::startProcessing() {
     }
     processed_count = 0;
     total_count = work_items.size();
+    failed_count = 0;
     cancel_requested = false;
     processing = true;
     notice.clear();
@@ -939,9 +1113,11 @@ void AppWindow::startProcessing() {
                 result.message = error.what();
             }
 
-            {
+            if (success) {
                 std::lock_guard lock(state_mutex);
                 outputs.push_back(std::move(result));
+            } else {
+                ++failed_count;
             }
             ++processed_count;
         }
@@ -959,6 +1135,48 @@ void AppWindow::joinFinishedWorker() {
         const bool was_cancelled = cancel_requested.load();
         worker.join();
         cancel_requested = false;
+        const std::size_t failures = failed_count.exchange(0);
+        if (failures > 0) {
+            std::ostringstream message;
+            if (mode == UiMode::UNLOCK) {
+                message << failures << " file" << (failures == 1 ? "" : "s")
+                        << " could not be unlocked. The password may be incorrect, the file may "
+                           "be corrupted, or the destination may be unavailable. No failed output "
+                           "was created or added to the Outputs list.";
+                failure_modal_title = "Unable to unlock files";
+
+                // Keep only failed inputs in the source list so a retry does not decrypt
+                // successful files again and create duplicate outputs.
+                std::vector<std::filesystem::path> successful_sources;
+                {
+                    std::lock_guard lock(state_mutex);
+                    for (const OutputItem& output : outputs) {
+                        successful_sources.push_back(output.source_path);
+                    }
+                }
+                sources.erase(std::remove_if(sources.begin(), sources.end(),
+                    [&](const SourceItem& source) {
+                        return std::find(successful_sources.begin(), successful_sources.end(),
+                                         source.path) != successful_sources.end();
+                    }), sources.end());
+            } else {
+                message << failures << " file" << (failures == 1 ? "" : "s")
+                        << " could not be protected. No failed output was added.";
+                failure_modal_title = "Unable to protect files";
+            }
+            failure_modal_message = message.str();
+            failure_modal_pending = true;
+        } else if (!was_cancelled && mode == UiMode::UNLOCK && processed_count.load() > 0) {
+            const std::size_t unlocked_count = processed_count.load();
+            const std::string destination = pathToUtf8(unlock_destination);
+            clearSession();
+            success_modal_title = "Files unlocked successfully";
+            success_modal_message = std::to_string(unlocked_count) + " file" +
+                                    (unlocked_count == 1 ? " was" : "s were") +
+                                    " verified and saved to:\n" + destination +
+                                    "\n\nThe workspace has been cleared for the next operation.";
+            success_modal_pending = true;
+        }
         if (was_cancelled) notice = "The operation stopped after the current file.";
     }
 }
@@ -992,13 +1210,45 @@ void AppWindow::saveOutput(std::size_t index) {
     if (moved && item.delete_source_after_save) {
         source_deleted = engine.delete_file(item.source_path);
     }
-    std::lock_guard lock(state_mutex);
-    outputs[index].status = moved ? ItemStatus::SAVED : ItemStatus::FAILED;
-    outputs[index].output_path = moved ? *destination : item.output_path;
-    outputs[index].staged = !moved;
-    outputs[index].message = !moved ? "The output could not be saved"
-                            : source_deleted ? pathToUtf8(*destination)
-                                             : "Saved, but the source file could not be deleted";
+    bool all_saved = false;
+    std::size_t saved_count = 0;
+    std::size_t delete_warning_count = 0;
+    {
+        std::lock_guard lock(state_mutex);
+        // A failed move remains pending so the user can choose another destination.
+        outputs[index].status = moved ? ItemStatus::SAVED : ItemStatus::PENDING_SAVE;
+        outputs[index].output_path = moved ? *destination : item.output_path;
+        outputs[index].staged = !moved;
+        outputs[index].message = !moved ? "Save failed. Choose another destination and try again."
+                                : source_deleted ? pathToUtf8(*destination)
+                                                 : "Saved, but the source file could not be deleted";
+        all_saved = !outputs.empty() && std::all_of(outputs.begin(), outputs.end(),
+            [](const OutputItem& output) { return output.status == ItemStatus::SAVED; });
+        saved_count = outputs.size();
+        delete_warning_count = static_cast<std::size_t>(std::count_if(
+            outputs.begin(), outputs.end(), [](const OutputItem& output) {
+                return output.message == "Saved, but the source file could not be deleted";
+            }));
+    }
+
+    if (!moved) {
+        failure_modal_title = "Unable to save the file";
+        failure_modal_message = "The encrypted output could not be saved. Choose another "
+                                "destination and try again. The staged output is still available.";
+        failure_modal_pending = true;
+    } else if (all_saved) {
+        clearSession();
+        success_modal_title = "Files saved successfully";
+        success_modal_message = std::to_string(saved_count) + " encrypted file" +
+                                (saved_count == 1 ? " was" : "s were") +
+                                " saved. The workspace has been cleared for the next operation.";
+        if (delete_warning_count > 0) {
+            success_modal_message += "\n\n" + std::to_string(delete_warning_count) +
+                                     " source file" + (delete_warning_count == 1 ? " was" : "s were") +
+                                     " not deleted.";
+        }
+        success_modal_pending = true;
+    }
 }
 
 void AppWindow::saveAllOutputs() {
@@ -1012,6 +1262,7 @@ void AppWindow::saveAllOutputs() {
             if (outputs[index].status == ItemStatus::PENDING_SAVE) indices.push_back(index);
         }
     }
+    std::size_t save_failures = 0;
     for (const std::size_t index : indices) {
         OutputItem item;
         {
@@ -1024,14 +1275,51 @@ void AppWindow::saveAllOutputs() {
         bool source_deleted = true;
         if (moved && item.delete_source_after_save) source_deleted = engine.delete_file(item.source_path);
 
-        std::lock_guard lock(state_mutex);
-        outputs[index].status = moved ? ItemStatus::SAVED : ItemStatus::FAILED;
-        outputs[index].output_path = moved ? destination : item.output_path;
-        outputs[index].staged = !moved;
-        outputs[index].message = !moved ? "The output could not be saved"
-                                : source_deleted ? pathToUtf8(destination)
-                                                 : "Saved, but the source file could not be deleted";
+        {
+            std::lock_guard lock(state_mutex);
+            outputs[index].status = moved ? ItemStatus::SAVED : ItemStatus::PENDING_SAVE;
+            outputs[index].output_path = moved ? destination : item.output_path;
+            outputs[index].staged = !moved;
+            outputs[index].message = !moved
+                                         ? "Save failed. Choose another destination and try again."
+                                         : source_deleted
+                                               ? pathToUtf8(destination)
+                                               : "Saved, but the source file could not be deleted";
+        }
+        if (!moved) ++save_failures;
     }
+
+    if (save_failures > 0) {
+        failure_modal_title = "Some files could not be saved";
+        failure_modal_message = std::to_string(save_failures) + " encrypted file" +
+                                (save_failures == 1 ? " remains" : "s remain") +
+                                " ready to save. Choose another destination and try again.";
+        failure_modal_pending = true;
+        return;
+    }
+
+    std::size_t saved_count = 0;
+    std::size_t delete_warning_count = 0;
+    {
+        std::lock_guard lock(state_mutex);
+        saved_count = outputs.size();
+        delete_warning_count = static_cast<std::size_t>(std::count_if(
+            outputs.begin(), outputs.end(), [](const OutputItem& output) {
+                return output.message == "Saved, but the source file could not be deleted";
+            }));
+    }
+    clearSession();
+    success_modal_title = "Files saved successfully";
+    success_modal_message = std::to_string(saved_count) + " encrypted file" +
+                            (saved_count == 1 ? " was" : "s were") +
+                            " saved to:\n" + pathToUtf8(*folder) +
+                            "\n\nThe workspace has been cleared for the next operation.";
+    if (delete_warning_count > 0) {
+        success_modal_message += "\n\n" + std::to_string(delete_warning_count) +
+                                 " source file" + (delete_warning_count == 1 ? " was" : "s were") +
+                                 " not deleted.";
+    }
+    success_modal_pending = true;
 }
 
 std::filesystem::path AppWindow::uniquePath(const std::filesystem::path& folder,
