@@ -13,6 +13,7 @@
 #include <openssl/crypto.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <iomanip>
@@ -28,6 +29,43 @@ namespace {
     constexpr ImVec4 COLOR_WARNING {0.95f, 0.66f, 0.25f, 1.0f};
     constexpr ImVec4 COLOR_ERROR {0.95f, 0.35f, 0.38f, 1.0f};
     constexpr ImVec4 COLOR_MUTED {0.56f, 0.62f, 0.70f, 1.0f};
+
+    struct PasswordStrength {
+        float value = 0.0f;
+        const char* label = "Weak";
+        ImVec4 color = COLOR_ERROR;
+    };
+
+    PasswordStrength evaluatePasswordStrength(const char* password) {
+        const std::size_t length = std::strlen(password);
+        bool has_lower = false;
+        bool has_upper = false;
+        bool has_digit = false;
+        bool has_symbol = false;
+        for (const unsigned char character : std::string_view(password)) {
+            has_lower |= std::islower(character) != 0;
+            has_upper |= std::isupper(character) != 0;
+            has_digit |= std::isdigit(character) != 0;
+            has_symbol |= std::isalnum(character) == 0;
+        }
+
+        const int categories = static_cast<int>(has_lower) + static_cast<int>(has_upper) +
+                               static_cast<int>(has_digit) + static_cast<int>(has_symbol);
+        int score = 0;
+        if (length >= 8) ++score;
+        if (length >= 12) ++score;
+        if (categories >= 3) ++score;
+        if (length >= 16 && categories >= 3) ++score;
+        if (categories <= 1) score = std::min(score, 1);
+        else if (categories == 2) score = std::min(score, 2);
+
+        switch (score) {
+            case 4: return {1.0f, "Strong", COLOR_SUCCESS};
+            case 3: return {0.75f, "Good", COLOR_ACCENT};
+            case 2: return {0.50f, "Fair", COLOR_WARNING};
+            default: return {0.25f, "Weak", COLOR_ERROR};
+        }
+    }
 
     std::filesystem::path pathFromUtf8(std::string_view value) {
         const std::u8string utf8(reinterpret_cast<const char8_t*>(value.data()), value.size());
@@ -181,6 +219,7 @@ namespace {
 AppWindow::AppWindow() = default;
 
 AppWindow::~AppWindow() {
+    cancel_requested = true;
     if (worker.joinable()) {
         worker.join();
     }
@@ -232,7 +271,7 @@ bool AppWindow::init() {
     std::error_code create_error;
     std::filesystem::create_directories(staging_directory, create_error);
     if (create_error) {
-        notice = "Geçici çalışma klasörü oluşturulamadı.";
+        notice = "The temporary workspace could not be created.";
         return false;
     }
     return true;
@@ -244,6 +283,7 @@ void AppWindow::setupImGui() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr;
 
     static const ImWchar glyph_ranges[] = {
         0x0020, 0x00FF,
@@ -417,19 +457,19 @@ void AppWindow::renderHeader() {
     ImGui::BeginChild("HeroHeader", size, false, ImGuiWindowFlags_NoBackground);
     ImGui::SetCursorPos(ImVec2(24, 18));
     if (title_font) ImGui::PushFont(title_font);
-    ImGui::TextUnformatted(mode == UiMode::PROTECT ? "Dosyaların. Kontrol sende."
-                                                    : "Dosyalarını güvenle geri al.");
+    ImGui::TextUnformatted(mode == UiMode::PROTECT ? "Your files. Your control."
+                                                    : "Bring your files back, safely.");
     if (title_font) ImGui::PopFont();
     ImGui::SetCursorPos(ImVec2(26, 67));
     ImGui::TextColored(ImVec4(0.72f, 0.78f, 0.89f, 1.0f),
                        mode == UiMode::PROTECT
-                           ? "Yerel AES-256-GCM koruması. Dosyalar cihazından ayrılmaz."
-                           : "KASA algoritmayı otomatik tanır ve bütünlüğü doğrular.");
+                           ? "Local AES-256-GCM protection. Your files never leave this device."
+                           : "KASA detects the algorithm and verifies integrity automatically.");
 
     ImGui::SetCursorPos(ImVec2(width - 250.0f, 28.0f));
     ImGui::TextColored(COLOR_SUCCESS, "●  LOCAL ONLY");
     ImGui::SetCursorPos(ImVec2(width - 250.0f, 61.0f));
-    ImGui::TextColored(COLOR_MUTED, "İşlem dosya türünden otomatik seçilir");
+    ImGui::TextColored(COLOR_MUTED, "The workflow is detected from the file type");
     ImGui::EndChild();
     ImGui::Dummy(ImVec2(0, 15));
 }
@@ -437,19 +477,29 @@ void AppWindow::renderHeader() {
 void AppWindow::renderSourcePanel() {
     beginCard("SourcePanel", ImVec2(0, 0));
     if (heading_font) ImGui::PushFont(heading_font);
-    ImGui::TextUnformatted(mode == UiMode::PROTECT ? "Kaynaklar" : "Şifreli dosyalar");
+    ImGui::TextUnformatted(mode == UiMode::PROTECT ? "Sources" : "Encrypted files");
     if (heading_font) ImGui::PopFont();
-    ImGui::TextColored(COLOR_MUTED, "Dosya seç veya bu karta sürükleyip bırak.");
+    ImGui::TextColored(COLOR_MUTED, "Choose files or drag them onto this card.");
 
     ImGui::BeginDisabled(processing);
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.24f, 0.34f, 1.0f));
-    if (ImGui::Button("+  Dosya")) chooseFiles();
+    if (ImGui::Button("+  Files")) chooseFiles();
     ImGui::SameLine();
-    if (ImGui::Button("+  Klasör")) chooseFolder();
+    if (ImGui::Button("+  Folder")) chooseFolder();
     ImGui::PopStyleColor();
     ImGui::SameLine();
-    if (ImGui::Button("Listeyi Temizle")) clearSession();
+    if (ImGui::Button("Clear List")) clearSession();
     ImGui::EndDisabled();
+
+    std::uintmax_t total_source_size = 0;
+    for (const SourceItem& source : sources) total_source_size += source.size;
+    if (sources.empty()) {
+        ImGui::TextColored(COLOR_MUTED, "No files selected");
+    } else {
+        ImGui::TextColored(COLOR_MUTED, "%zu file%s selected  |  %s total",
+                           sources.size(), sources.size() == 1 ? "" : "s",
+                           formatSize(total_source_size).c_str());
+    }
 
     renderSourceList();
     ImGui::Dummy(ImVec2(0, 2));
@@ -458,51 +508,58 @@ void AppWindow::renderSourcePanel() {
     // window is short or the advanced section is expanded.
     const float settings_height = std::max(150.0f, ImGui::GetContentRegionAvail().y - 58.0f);
     ImGui::BeginChild("SecuritySettings", ImVec2(0, settings_height), ImGuiChildFlags_None);
-    ImGui::TextColored(COLOR_MUTED, "GÜVENLİK AYARLARI");
+    ImGui::TextColored(COLOR_MUTED, "SECURITY SETTINGS");
 
     const ImGuiInputTextFlags password_flags = show_password ? 0 : ImGuiInputTextFlags_Password;
-    ImGui::TextUnformatted("Parola");
+    ImGui::TextUnformatted("Password");
     ImGui::SetNextItemWidth(-1);
     ImGui::InputText("##Password", password.data(), password.size(), password_flags);
     if (mode == UiMode::PROTECT) {
-        ImGui::TextUnformatted("Parolayı doğrula");
+        if (password[0] != '\0') {
+            const PasswordStrength strength = evaluatePasswordStrength(password.data());
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, strength.color);
+            ImGui::ProgressBar(strength.value, ImVec2(-1, 6), "");
+            ImGui::PopStyleColor();
+            ImGui::TextColored(strength.color, "%s password", strength.label);
+        }
+        ImGui::TextUnformatted("Confirm password");
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##PasswordConfirmation", password_confirmation.data(),
                          password_confirmation.size(), password_flags);
     }
-    ImGui::Checkbox("Parolayı göster", &show_password);
+    ImGui::Checkbox("Show password", &show_password);
 
     if (mode == UiMode::PROTECT) {
-        if (ImGui::TreeNodeEx("Gelişmiş ayarlar", ImGuiTreeNodeFlags_SpanAvailWidth)) {
+        if (ImGui::TreeNodeEx("Advanced settings", ImGuiTreeNodeFlags_SpanAvailWidth)) {
             show_advanced = true;
-            if (ImGui::RadioButton("AES-256-GCM (önerilen)", cipher == CipherType::AES256)) {
+            if (ImGui::RadioButton("AES-256-GCM (recommended)", cipher == CipherType::AES256)) {
                 cipher = CipherType::AES256;
             }
-            if (ImGui::RadioButton("XOR (eğitim modu)", cipher == CipherType::XOR)) {
+            if (ImGui::RadioButton("XOR (learning mode)", cipher == CipherType::XOR)) {
                 cipher = CipherType::XOR;
             }
             if (cipher == CipherType::XOR) {
                 ImGui::TextColored(COLOR_WARNING,
-                                   "XOR gerçek dosya güvenliği için önerilmez.");
+                                   "XOR is not recommended for real file security.");
             }
             ImGui::TreePop();
         }
-        ImGui::Checkbox("Çıktı kaydedildikten sonra kaynağı sil", &delete_original);
+        ImGui::Checkbox("Delete the source after the output is saved", &delete_original);
         if (delete_original) {
             ImGui::TextColored(COLOR_WARNING,
-                               "Kaynak yalnızca şifreli çıktı başarıyla kaydedilince silinir.");
+                               "The source is deleted only after the encrypted output is saved successfully.");
         }
     } else {
-        ImGui::TextUnformatted("Çözülmüş dosyaların konumu");
+        ImGui::TextUnformatted("Decrypted file destination");
         const std::string destination = unlock_destination.empty()
-            ? "Henüz klasör seçilmedi"
+            ? "No folder selected"
             : pathToUtf8(unlock_destination);
         ImGui::TextColored(unlock_destination.empty() ? COLOR_WARNING : COLOR_MUTED,
                            "%s", destination.c_str());
         ImGui::BeginDisabled(processing);
-        if (ImGui::Button("Hedef Klasör Seç")) chooseUnlockDestination();
+        if (ImGui::Button("Choose Destination")) chooseUnlockDestination();
         ImGui::EndDisabled();
-        ImGui::Checkbox("Başarılı çözmeden sonra .kasa dosyasını sil", &delete_original);
+        ImGui::Checkbox("Delete the .kasa file after successful decryption", &delete_original);
     }
 
     if (!notice.empty()) {
@@ -515,16 +572,30 @@ void AppWindow::renderSourcePanel() {
     const bool can_start = !processing && !sources.empty() && password[0] != '\0' && passwords_match &&
                            (mode == UiMode::PROTECT || !unlock_destination.empty());
     if (!passwords_match) {
-        ImGui::TextColored(COLOR_ERROR, "Parolalar eşleşmiyor.");
+        ImGui::TextColored(COLOR_ERROR, "Passwords do not match.");
     }
-    ImGui::BeginDisabled(!can_start);
-    ImGui::PushStyleColor(ImGuiCol_Button, COLOR_ACCENT);
-    if (ImGui::Button(mode == UiMode::PROTECT ? "DOSYALARI KORU" : "KİLİDİ AÇ",
-                      ImVec2(-1, 46))) {
-        startProcessing();
+    if (processing) {
+        const bool cancellation_pending = cancel_requested.load();
+        ImGui::BeginDisabled(cancellation_pending);
+        ImGui::PushStyleColor(ImGuiCol_Button, COLOR_WARNING);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.10f, 0.07f, 0.02f, 1.0f));
+        if (ImGui::Button(cancellation_pending ? "CANCELLATION REQUESTED..."
+                                               : "CANCEL AFTER CURRENT FILE",
+                          ImVec2(-1, 46))) {
+            cancel_requested = true;
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::EndDisabled();
+    } else {
+        ImGui::BeginDisabled(!can_start);
+        ImGui::PushStyleColor(ImGuiCol_Button, COLOR_ACCENT);
+        if (ImGui::Button(mode == UiMode::PROTECT ? "PROTECT FILES" : "UNLOCK FILES",
+                          ImVec2(-1, 46))) {
+            startProcessing();
+        }
+        ImGui::PopStyleColor();
+        ImGui::EndDisabled();
     }
-    ImGui::PopStyleColor();
-    ImGui::EndDisabled();
     endCard();
 }
 
@@ -554,40 +625,63 @@ void AppWindow::renderSourceList() {
         draw->AddText(area_position + ImVec2(area_size.x * 0.5f - 5.0f, 56.0f),
                       IM_COL32(110, 231, 239, 255), "+");
         ImGui::SetCursorPosY(105.0f);
-        const char* primary = mode == UiMode::PROTECT ? "Korunacak dosyaları buraya bırak"
-                                                      : ".kasa dosyalarını buraya bırak";
+        const char* primary = mode == UiMode::PROTECT ? "Drop files to protect here"
+                                                      : "Drop .kasa files here";
         const float primary_width = ImGui::CalcTextSize(primary).x;
         ImGui::SetCursorPosX((area_size.x - primary_width) * 0.5f);
         ImGui::TextUnformatted(primary);
-        const char* secondary = "Dosyalar taşınmaz; yalnızca listeye eklenir.";
+        const char* secondary = "Files are not moved; only references are added.";
         const float secondary_width = ImGui::CalcTextSize(secondary).x;
         ImGui::SetCursorPosX((area_size.x - secondary_width) * 0.5f);
         ImGui::TextColored(COLOR_MUTED, "%s", secondary);
     }
-    for (std::size_t index = 0; index < sources.size(); ++index) {
-        ImGui::PushID(static_cast<int>(index));
-        const ImVec2 row_start = ImGui::GetCursorScreenPos();
-        draw->AddRectFilled(row_start, row_start + ImVec2(ImGui::GetContentRegionAvail().x, 62.0f),
-                            IM_COL32(23, 33, 57, 235), 10.0f);
-        ImGui::Dummy(ImVec2(8, 3));
-        ImGui::SameLine();
-        ImGui::BeginGroup();
-        const std::string name = pathToUtf8(sources[index].path.filename());
-        ImGui::TextUnformatted(name.c_str());
-        ImGui::SameLine();
-        ImGui::TextColored(COLOR_MUTED, "%s", formatSize(sources[index].size).c_str());
-        ImGui::TextColored(COLOR_MUTED, "%s", pathToUtf8(sources[index].path.parent_path()).c_str());
-        ImGui::EndGroup();
-        if (!processing) {
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - 30.0f);
-            if (ImGui::SmallButton("x")) {
-                sources.erase(sources.begin() + static_cast<std::ptrdiff_t>(index));
+    if (!sources.empty()) {
+        const float item_step = mode == UiMode::UNLOCK ? 85.0f : 68.0f;
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(sources.size()), item_step);
+        bool item_removed = false;
+        while (clipper.Step() && !item_removed) {
+            for (int visible_index = clipper.DisplayStart;
+                 visible_index < clipper.DisplayEnd; ++visible_index) {
+                const std::size_t index = static_cast<std::size_t>(visible_index);
+                ImGui::PushID(visible_index);
+                const ImVec2 row_start = ImGui::GetCursorScreenPos();
+                draw->AddRectFilled(
+                    row_start,
+                    row_start + ImVec2(ImGui::GetContentRegionAvail().x, item_step - 6.0f),
+                    IM_COL32(23, 33, 57, 235), 10.0f);
+                ImGui::Dummy(ImVec2(8, 3));
+                ImGui::SameLine();
+                ImGui::BeginGroup();
+                const std::string name = pathToUtf8(sources[index].path.filename());
+                ImGui::TextUnformatted(name.c_str());
+                ImGui::SameLine();
+                ImGui::TextColored(COLOR_MUTED, "%s", formatSize(sources[index].size).c_str());
+                if (sources[index].kasa_info) {
+                    const KasaFileInfo& info = *sources[index].kasa_info;
+                    const char* cipher_name = info.cipher == CipherType::AES256
+                                                  ? "AES-256-GCM"
+                                                  : "XOR + HMAC-SHA256";
+                    ImGui::TextColored(COLOR_VIOLET,
+                                       "%s  |  Format v%u  |  Authenticated on unlock",
+                                       cipher_name, static_cast<unsigned int>(info.format_version));
+                }
+                ImGui::TextColored(COLOR_MUTED, "%s",
+                                   pathToUtf8(sources[index].path.parent_path()).c_str());
+                ImGui::EndGroup();
+                if (!processing) {
+                    ImGui::SameLine(ImGui::GetContentRegionMax().x - 30.0f);
+                    if (ImGui::SmallButton("x")) {
+                        sources.erase(sources.begin() + static_cast<std::ptrdiff_t>(index));
+                        item_removed = true;
+                    }
+                }
+                ImGui::SetCursorScreenPos(ImVec2(row_start.x, row_start.y + item_step));
                 ImGui::PopID();
-                break;
+                if (item_removed) break;
             }
         }
-        ImGui::Dummy(ImVec2(0, 8));
-        ImGui::PopID();
+        clipper.End();
     }
     ImGui::EndChild();
 }
@@ -595,11 +689,11 @@ void AppWindow::renderSourceList() {
 void AppWindow::renderOutputPanel() {
     beginCard("OutputPanel", ImVec2(0, 0));
     if (heading_font) ImGui::PushFont(heading_font);
-    ImGui::TextUnformatted("Çıktılar");
+    ImGui::TextUnformatted("Outputs");
     if (heading_font) ImGui::PopFont();
     ImGui::TextColored(COLOR_MUTED,
-                       mode == UiMode::PROTECT ? "Hazırlanan şifreli dosyaları istediğin yere kaydet."
-                                               : "Doğrulanan dosyalar seçtiğin klasöre yazılır.");
+                       mode == UiMode::PROTECT ? "Save prepared encrypted files wherever you choose."
+                                               : "Verified files are written to your selected folder.");
 
     if (processing) {
         const std::size_t total = total_count.load();
@@ -611,7 +705,7 @@ void AppWindow::renderOutputPanel() {
     } else if (!outputs.empty()) {
         ImGui::BeginDisabled(mode != UiMode::PROTECT);
         ImGui::PushStyleColor(ImGuiCol_Button, COLOR_VIOLET);
-        if (ImGui::Button("Tümünü Kaydet...")) saveAllOutputs();
+        if (ImGui::Button("Save All...")) saveAllOutputs();
         ImGui::PopStyleColor();
         ImGui::EndDisabled();
     }
@@ -641,11 +735,11 @@ void AppWindow::renderOutputList() {
         draw->AddCircle(center, 46.0f, IM_COL32(119, 89, 230, 120), 48, 1.2f);
         draw->AddCircle(center, 23.0f, IM_COL32(49, 209, 224, 120), 32, 1.5f);
         ImGui::SetCursorPosY(list_size.y * 0.42f + 67.0f);
-        const char* primary = mode == UiMode::PROTECT ? "Çıktıların burada hazır olacak"
-                                                      : "Çözme sonuçları burada görünecek";
+        const char* primary = mode == UiMode::PROTECT ? "Your encrypted files will appear here"
+                                                      : "Decryption results will appear here";
         ImGui::SetCursorPosX((list_size.x - ImGui::CalcTextSize(primary).x) * 0.5f);
         ImGui::TextUnformatted(primary);
-        const char* secondary = "Durum, konum ve doğrulama bilgileri tek bakışta.";
+        const char* secondary = "See status, location, and verification details at a glance.";
         ImGui::SetCursorPosX((list_size.x - ImGui::CalcTextSize(secondary).x) * 0.5f);
         ImGui::TextColored(COLOR_MUTED, "%s", secondary);
     }
@@ -674,7 +768,7 @@ void AppWindow::renderOutputList() {
             if (ImGui::Button("Kaydet...")) saveOutput(index);
         } else if (item.status == ItemStatus::SAVED) {
             ImGui::SameLine(ImGui::GetContentRegionMax().x - 135.0f);
-            if (ImGui::SmallButton("Klasörde Göster")) {
+            if (ImGui::SmallButton("Show in Folder")) {
                 const std::wstring argument = L"/select,\"" + item.output_path.wstring() + L"\"";
                 ShellExecuteW(nullptr, L"open", L"explorer.exe", argument.c_str(), nullptr, SW_SHOWNORMAL);
             }
@@ -713,12 +807,26 @@ void AppWindow::addPath(const std::filesystem::path& path) {
             }
         }
     } catch (const std::filesystem::filesystem_error& error) {
-        notice = std::string("Dosya tarama hatası: ") + error.what();
+        notice = std::string("File scan failed: ") + error.what();
     }
 }
 
 void AppWindow::addFile(const std::filesystem::path& path) {
-    const bool is_kasa = path.extension() == ".kasa";
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](const unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    const bool is_kasa = extension == ".kasa";
+
+    std::optional<KasaFileInfo> kasa_info;
+    if (is_kasa) {
+        kasa_info = engine.inspect_file(path);
+        if (!kasa_info) {
+            notice = "This file has a .kasa extension but does not contain a supported KASA footer.";
+            return;
+        }
+    }
 
     // The first source decides the workflow: .kasa files are unlocked, every
     // other file is protected. This keeps mode selection next to the actual input.
@@ -729,8 +837,8 @@ void AppWindow::addFile(const std::filesystem::path& path) {
 
     if ((mode == UiMode::PROTECT && is_kasa) || (mode == UiMode::UNLOCK && !is_kasa)) {
         notice = mode == UiMode::PROTECT
-                     ? ".kasa dosyaları koruma listesine eklenmedi."
-                     : "Şifrelenmemiş dosyalar kilit açma listesine eklenmedi.";
+                     ? ".kasa files were not added to the protection list."
+                     : "Unencrypted files were not added to the unlock list.";
         return;
     }
     const auto duplicate = std::find_if(sources.begin(), sources.end(),
@@ -739,7 +847,7 @@ void AppWindow::addFile(const std::filesystem::path& path) {
 
     std::error_code size_error;
     const std::uintmax_t size = std::filesystem::file_size(path, size_error);
-    if (!size_error) sources.push_back({path, size});
+    if (!size_error) sources.push_back({path, size, kasa_info});
 }
 
 void AppWindow::clearSession() {
@@ -780,12 +888,14 @@ void AppWindow::startProcessing() {
     }
     processed_count = 0;
     total_count = work_items.size();
+    cancel_requested = false;
     processing = true;
     notice.clear();
 
     worker = std::thread([this, work_items, password_value, selected_mode,
                           selected_cipher, should_delete, destination_folder]() mutable {
         for (const SourceItem& source : work_items) {
+            if (cancel_requested) break;
             {
                 std::lock_guard lock(state_mutex);
                 current_file = pathToUtf8(source.path.filename());
@@ -804,7 +914,7 @@ void AppWindow::startProcessing() {
                                                   selected_cipher, false, result.output_path);
                     result.staged = success;
                     result.status = success ? ItemStatus::PENDING_SAVE : ItemStatus::FAILED;
-                    result.message = success ? "Kaydedilmeyi bekliyor" : "Şifreleme başarısız";
+                    result.message = success ? "Ready to save" : "Encryption failed";
                 } else {
                     const std::filesystem::path desired_name = source.path.stem();
                     result.output_path = uniquePath(destination_folder, desired_name);
@@ -813,7 +923,7 @@ void AppWindow::startProcessing() {
                                                   CipherType::AES256, should_delete, result.output_path);
                     result.status = success ? ItemStatus::SAVED : ItemStatus::FAILED;
                     result.message = success ? pathToUtf8(result.output_path)
-                                             : "Parola yanlış, dosya bozuk veya hedef kullanılamıyor";
+                                             : "Wrong password, corrupted file, or unavailable destination";
                 }
             } catch (const std::exception& error) {
                 result.status = ItemStatus::FAILED;
@@ -837,7 +947,10 @@ void AppWindow::startProcessing() {
 
 void AppWindow::joinFinishedWorker() {
     if (!processing && worker.joinable()) {
+        const bool was_cancelled = cancel_requested.load();
         worker.join();
+        cancel_requested = false;
+        if (was_cancelled) notice = "The operation stopped after the current file.";
     }
 }
 
@@ -846,11 +959,11 @@ void AppWindow::chooseFiles() {
 }
 
 void AppWindow::chooseFolder() {
-    if (const auto folder = openFolderDialog(L"KASA için klasör seçin")) addPath(*folder);
+    if (const auto folder = openFolderDialog(L"Choose a folder for KASA")) addPath(*folder);
 }
 
 void AppWindow::chooseUnlockDestination() {
-    if (const auto folder = openFolderDialog(L"Çözülmüş dosyaların kaydedileceği klasörü seçin")) {
+    if (const auto folder = openFolderDialog(L"Choose where decrypted files will be saved")) {
         unlock_destination = *folder;
     }
 }
@@ -874,13 +987,13 @@ void AppWindow::saveOutput(std::size_t index) {
     outputs[index].status = moved ? ItemStatus::SAVED : ItemStatus::FAILED;
     outputs[index].output_path = moved ? *destination : item.output_path;
     outputs[index].staged = !moved;
-    outputs[index].message = !moved ? "Çıktı kaydedilemedi"
+    outputs[index].message = !moved ? "The output could not be saved"
                             : source_deleted ? pathToUtf8(*destination)
-                                             : "Kaydedildi; kaynak dosya silinemedi";
+                                             : "Saved, but the source file could not be deleted";
 }
 
 void AppWindow::saveAllOutputs() {
-    const auto folder = openFolderDialog(L"Şifreli çıktıların kaydedileceği klasörü seçin");
+    const auto folder = openFolderDialog(L"Choose where encrypted outputs will be saved");
     if (!folder) return;
 
     std::vector<std::size_t> indices;
@@ -906,9 +1019,9 @@ void AppWindow::saveAllOutputs() {
         outputs[index].status = moved ? ItemStatus::SAVED : ItemStatus::FAILED;
         outputs[index].output_path = moved ? destination : item.output_path;
         outputs[index].staged = !moved;
-        outputs[index].message = !moved ? "Çıktı kaydedilemedi"
+        outputs[index].message = !moved ? "The output could not be saved"
                                 : source_deleted ? pathToUtf8(destination)
-                                                 : "Kaydedildi; kaynak dosya silinemedi";
+                                                 : "Saved, but the source file could not be deleted";
     }
 }
 

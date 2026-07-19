@@ -8,6 +8,7 @@
 #include <atomic>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,6 +31,7 @@ private:
     struct SourceItem {
         std::filesystem::path path;
         std::uintmax_t size = 0;
+        std::optional<KasaFileInfo> kasa_info;
     };
 
     struct OutputItem {
@@ -64,6 +66,7 @@ private:
 
     std::thread worker;
     std::atomic<bool> processing {false};
+    std::atomic<bool> cancel_requested {false};
     std::atomic<std::size_t> processed_count {0};
     std::atomic<std::size_t> total_count {0};
     mutable std::mutex state_mutex;

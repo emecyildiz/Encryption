@@ -23,10 +23,10 @@ struct FileGuard {
     std::filesystem::path target_path;
     bool success = false;
 
-    // Nesne yaratılırken silinecek hedef yolu hafızaya alırız
+    // Store the target path when the guard is created.
     FileGuard(std::filesystem::path p) : target_path(p) {}
 
-    // Kutsal An: Fonksiyon nerede biterse bitsin burası OTOMATİK çalışır!
+    // The temporary file is removed automatically, regardless of how the function exits.
     ~FileGuard() noexcept {
         if (!success) {
             std::error_code error;
@@ -51,7 +51,7 @@ namespace {
     constexpr std::size_t AES_KEY_SIZE = 32;
     constexpr int AES_KDF_ITERATIONS = 100000;
 
-    static_assert(FOOTER_SIZE == 6, "KASA footer boyutu beklenenden farkli");
+    static_assert(FOOTER_SIZE == 6, "Unexpected KASA footer size");
 
     struct Footer {
         std::array<char, 4> magic {};
@@ -195,6 +195,32 @@ namespace {
     }
 }
 
+std::optional<KasaFileInfo> encryption_engine::inspect_file(
+    const std::filesystem::path& file_path) const {
+    std::error_code size_error;
+    const std::uintmax_t file_size = std::filesystem::file_size(file_path, size_error);
+    if (size_error || file_size < FOOTER_SIZE) return std::nullopt;
+
+    std::unique_ptr<FILE, decltype(&fclose)> file(
+        fopen(file_path.string().c_str(), "rb"), &fclose);
+    if (!file) return std::nullopt;
+
+    Footer footer;
+    if (!read_footer(file.get(), footer) || footer.magic != FOOTER_MAGIC ||
+        footer.version != FORMAT_VERSION) {
+        return std::nullopt;
+    }
+
+    switch (footer.cipher_id) {
+        case XOR_CIPHER_ID:
+            return KasaFileInfo {footer.version, CipherType::XOR};
+        case AES256_CIPHER_ID:
+            return KasaFileInfo {footer.version, CipherType::AES256};
+        default:
+            return std::nullopt;
+    }
+}
+
 void encryption_engine::scan_and_process(std::filesystem::path root_path, std::string key, ActionType action, CipherType cipher, bool delete_original) {
     try {
         std::list<std::filesystem::path> files;
@@ -221,7 +247,7 @@ void encryption_engine::scan_and_process(std::filesystem::path root_path, std::s
             process_file(file, key, action, cipher, delete_original);
         }
     }catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Hata: " << e.what() << '\n';
+        std::cerr << "Error: " << e.what() << '\n';
     }
 }
 
@@ -248,7 +274,7 @@ bool encryption_engine::process_file(std::filesystem::path file_path, std::strin
             }
             Footer footer;
             if (!read_footer(file.get(), footer)) {
-                std::cout << "Mühür okunamadi, dosya manipüle edilmiş olabilir!" << std::endl;
+                std::cout << "The footer could not be read; the file may have been tampered with." << std::endl;
                 return false;
             }
             if (footer.magic == FOOTER_MAGIC && footer.version == FORMAT_VERSION) {
@@ -263,10 +289,10 @@ bool encryption_engine::process_file(std::filesystem::path file_path, std::strin
             return false;
         }
         default:
-            std::cout << "process_file hatası" << std::endl;
+            std::cout << "process_file failed" << std::endl;
             return false;
     }
-    std::cout << "hata oldu seçim" << std::endl;
+    std::cout << "Invalid action selection" << std::endl;
     return false;
 }
 
@@ -310,7 +336,7 @@ bool encryption_engine::delete_file(std::filesystem::path file_path) {
 bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::string key, bool delete_original,
                                        std::filesystem::path destination_path) {
     if (key.empty()) {
-        std::cout << "Sifre bos olamaz" << std::endl;
+        std::cout << "Password cannot be empty" << std::endl;
         return false;
     }
 
@@ -322,13 +348,13 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
     std::filesystem::path temporary_path = output_path;
     temporary_path += ".tmp";
     if (std::filesystem::exists(output_path) || std::filesystem::exists(temporary_path)) {
-        std::cout << "Hedef dosya zaten mevcut" << std::endl;
+        std::cout << "The destination file already exists" << std::endl;
         return false;
     }
 
     std::unique_ptr<FILE, decltype(&fclose)> input(fopen(file_path.string().c_str(), "rb"), &fclose);
     if (!input) {
-        std::cout << "Kaynak dosya acilamadi" << std::endl;
+        std::cout << "The source file could not be opened" << std::endl;
         return false;
     }
 
@@ -336,13 +362,13 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
     std::array<unsigned char, AES_NONCE_SIZE> nonce {};
     if (RAND_bytes(salt.data(), static_cast<int>(salt.size())) != 1 ||
         RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) != 1) {
-        std::cout << "AES salt veya nonce uretilemedi" << std::endl;
+        std::cout << "The AES salt or nonce could not be generated" << std::endl;
         return false;
     }
 
     AesKey aes_key;
     if (!derive_aes_key(key, salt, aes_key)) {
-        std::cout << "AES anahtari turetilemedi" << std::endl;
+        std::cout << "The AES key could not be derived" << std::endl;
         return false;
     }
 
@@ -352,7 +378,7 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
         EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN,
                             static_cast<int>(nonce.size()), nullptr) != 1 ||
         EVP_EncryptInit_ex(context.get(), nullptr, nullptr, aes_key.value.data(), nonce.data()) != 1) {
-        std::cout << "AES-GCM sifreleme baslatilamadi" << std::endl;
+        std::cout << "AES-GCM encryption could not be initialized" << std::endl;
         return false;
     }
 
@@ -364,7 +390,7 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
                           nonce.data(), static_cast<int>(nonce.size())) != 1 ||
         EVP_EncryptUpdate(context.get(), nullptr, &aad_length,
                           footer_bytes.data(), static_cast<int>(footer_bytes.size())) != 1) {
-        std::cout << "AES-GCM AAD eklenemedi" << std::endl;
+        std::cout << "AES-GCM additional authenticated data could not be added" << std::endl;
         return false;
     }
 
@@ -372,7 +398,7 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
     std::unique_ptr<FILE, decltype(&fclose)> output(fopen(temporary_path.string().c_str(), "wb"), &fclose);
     if (!output || fwrite(salt.data(), 1, salt.size(), output.get()) != salt.size() ||
         fwrite(nonce.data(), 1, nonce.size(), output.get()) != nonce.size()) {
-        std::cout << "Gecici AES dosyasi olusturulamadi" << std::endl;
+        std::cout << "The temporary AES file could not be created" << std::endl;
         return false;
     }
 
@@ -389,12 +415,12 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
             (bytes_written > 0 && fwrite(output_buffer.data(), 1,
                                          static_cast<std::size_t>(bytes_written), output.get())
                                   != static_cast<std::size_t>(bytes_written))) {
-            std::cout << "AES verisi sifrelenemedi" << std::endl;
+            std::cout << "AES data encryption failed" << std::endl;
             return false;
         }
     }
     if (ferror(input.get())) {
-        std::cout << "Kaynak dosya okunamadi" << std::endl;
+        std::cout << "The source file could not be read" << std::endl;
         return false;
     }
 
@@ -403,7 +429,7 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
         (final_length > 0 && fwrite(output_buffer.data(), 1,
                                     static_cast<std::size_t>(final_length), output.get())
                              != static_cast<std::size_t>(final_length))) {
-        std::cout << "AES sifreleme tamamlanamadi" << std::endl;
+        std::cout << "AES encryption could not be finalized" << std::endl;
         return false;
     }
 
@@ -412,7 +438,7 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
                             static_cast<int>(tag.size()), tag.data()) != 1 ||
         fwrite(tag.data(), 1, tag.size(), output.get()) != tag.size() ||
         !write_footer(output.get(), AES256_CIPHER_ID) || !finish_file(output.get())) {
-        std::cout << "AES tag veya footer yazilamadi" << std::endl;
+        std::cout << "The AES tag or footer could not be written" << std::endl;
         return false;
     }
 
@@ -423,13 +449,13 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
     std::error_code rename_error;
     std::filesystem::rename(temporary_path, output_path, rename_error);
     if (rename_error) {
-        std::cout << "Gecici AES dosyasi yeniden adlandirilamadi" << std::endl;
+        std::cout << "The temporary AES file could not be renamed" << std::endl;
         return false;
     }
     temporary_guard.success = true;
 
     if (delete_original && !delete_file(file_path)) {
-        std::cout << "Sifreleme tamamlandi ancak orijinal dosya silinemedi" << std::endl;
+        std::cout << "Encryption succeeded, but the original file could not be deleted" << std::endl;
         return false;
     }
     return true;
@@ -438,20 +464,20 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
 bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::string key, bool delete_original,
                                         std::filesystem::path destination_path) {
     if (key.empty() || file_path.extension() != ".kasa") {
-        std::cout << "Gecersiz AES cozme istegi" << std::endl;
+        std::cout << "Invalid AES decryption request" << std::endl;
         return false;
     }
 
     std::unique_ptr<FILE, decltype(&fclose)> input(fopen(file_path.string().c_str(), "rb"), &fclose);
     if (!input) {
-        std::cout << "Sifreli AES dosyasi acilamadi" << std::endl;
+        std::cout << "The encrypted AES file could not be opened" << std::endl;
         return false;
     }
 
     const std::uintmax_t file_size = std::filesystem::file_size(file_path);
     const std::uintmax_t metadata_size = AES_SALT_SIZE + AES_NONCE_SIZE + AES_TAG_SIZE + FOOTER_SIZE;
     if (file_size < metadata_size) {
-        std::cout << "Gecersiz AES dosya boyutu" << std::endl;
+        std::cout << "Invalid AES file size" << std::endl;
         return false;
     }
     const std::uintmax_t ciphertext_size = file_size - metadata_size;
@@ -459,7 +485,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     Footer footer;
     if (!read_footer(input.get(), footer) || footer.magic != FOOTER_MAGIC ||
         footer.version != FORMAT_VERSION || footer.cipher_id != AES256_CIPHER_ID) {
-        std::cout << "Gecersiz AES footer" << std::endl;
+        std::cout << "Invalid AES footer" << std::endl;
         return false;
     }
 
@@ -470,7 +496,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     std::array<unsigned char, AES_NONCE_SIZE> nonce {};
     if (fread(salt.data(), 1, salt.size(), input.get()) != salt.size() ||
         fread(nonce.data(), 1, nonce.size(), input.get()) != nonce.size()) {
-        std::cout << "AES salt veya nonce okunamadi" << std::endl;
+        std::cout << "The AES salt or nonce could not be read" << std::endl;
         return false;
     }
 
@@ -480,13 +506,13 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     }
     std::array<unsigned char, AES_TAG_SIZE> tag {};
     if (fread(tag.data(), 1, tag.size(), input.get()) != tag.size()) {
-        std::cout << "AES tag okunamadi" << std::endl;
+        std::cout << "The AES authentication tag could not be read" << std::endl;
         return false;
     }
 
     AesKey aes_key;
     if (!derive_aes_key(key, salt, aes_key)) {
-        std::cout << "AES anahtari turetilemedi" << std::endl;
+        std::cout << "The AES key could not be derived" << std::endl;
         return false;
     }
 
@@ -496,7 +522,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
         EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN,
                             static_cast<int>(nonce.size()), nullptr) != 1 ||
         EVP_DecryptInit_ex(context.get(), nullptr, nullptr, aes_key.value.data(), nonce.data()) != 1) {
-        std::cout << "AES-GCM cozme baslatilamadi" << std::endl;
+        std::cout << "AES-GCM decryption could not be initialized" << std::endl;
         return false;
     }
 
@@ -508,7 +534,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
                           nonce.data(), static_cast<int>(nonce.size())) != 1 ||
         EVP_DecryptUpdate(context.get(), nullptr, &aad_length,
                           footer_bytes.data(), static_cast<int>(footer_bytes.size())) != 1) {
-        std::cout << "AES-GCM AAD dogrulanamadi" << std::endl;
+        std::cout << "AES-GCM additional authenticated data could not be verified" << std::endl;
         return false;
     }
 
@@ -520,7 +546,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     std::filesystem::path temporary_path = output_path;
     temporary_path += ".tmp";
     if (std::filesystem::exists(output_path) || std::filesystem::exists(temporary_path)) {
-        std::cout << "Cozulmus hedef dosya zaten mevcut" << std::endl;
+        std::cout << "The decrypted destination file already exists" << std::endl;
         return false;
     }
     if (_fseeki64(input.get(), static_cast<std::int64_t>(AES_SALT_SIZE + AES_NONCE_SIZE), SEEK_SET) != 0) {
@@ -530,7 +556,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     FileGuard temporary_guard(temporary_path);
     std::unique_ptr<FILE, decltype(&fclose)> output(fopen(temporary_path.string().c_str(), "wb"), &fclose);
     if (!output) {
-        std::cout << "Gecici cozulmus AES dosyasi olusturulamadi" << std::endl;
+        std::cout << "The temporary decrypted AES file could not be created" << std::endl;
         return false;
     }
 
@@ -548,7 +574,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
             (bytes_written > 0 && fwrite(output_buffer.data(), 1,
                                          static_cast<std::size_t>(bytes_written), output.get())
                                   != static_cast<std::size_t>(bytes_written))) {
-            std::cout << "AES verisi cozulemedi" << std::endl;
+            std::cout << "AES data decryption failed" << std::endl;
             return false;
         }
         processed_bytes += bytes_read;
@@ -560,14 +586,14 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     }
     int final_length = 0;
     if (EVP_DecryptFinal_ex(context.get(), output_buffer.data(), &final_length) != 1) {
-        std::cout << "Sifre yanlis veya dosya bozulmus" << std::endl;
+        std::cout << "The password is incorrect or the file is corrupted" << std::endl;
         return false;
     }
     if ((final_length > 0 && fwrite(output_buffer.data(), 1,
                                     static_cast<std::size_t>(final_length), output.get())
                              != static_cast<std::size_t>(final_length)) ||
         !finish_file(output.get())) {
-        std::cout << "Cozulmus AES dosyasi tamamlanamadi" << std::endl;
+        std::cout << "The decrypted AES file could not be finalized" << std::endl;
         return false;
     }
 
@@ -578,13 +604,13 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     std::error_code rename_error;
     std::filesystem::rename(temporary_path, output_path, rename_error);
     if (rename_error) {
-        std::cout << "Gecici cozulmus AES dosyasi yeniden adlandirilamadi" << std::endl;
+        std::cout << "The temporary decrypted AES file could not be renamed" << std::endl;
         return false;
     }
     temporary_guard.success = true;
 
     if (delete_original && !delete_file(file_path)) {
-        std::cout << "Dosya cozuldu ancak sifreli dosya silinemedi" << std::endl;
+        std::cout << "Decryption succeeded, but the encrypted file could not be deleted" << std::endl;
         return false;
     }
     return true;
@@ -593,7 +619,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
 bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string key, bool delete_original,
                                     std::filesystem::path destination_path) {
     if (key.empty()) {
-        std::cout << "Sifre bos olamaz" << std::endl;
+        std::cout << "Password cannot be empty" << std::endl;
         return false;
     }
 
@@ -606,38 +632,38 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
     temporary_path += ".tmp";
 
     if (std::filesystem::exists(output_path) || std::filesystem::exists(temporary_path)) {
-        std::cout << "Hedef dosya zaten mevcut" << std::endl;
+        std::cout << "The destination file already exists" << std::endl;
         return false;
     }
 
     std::unique_ptr<FILE, decltype(&fclose)> input(fopen(file_path.string().c_str(), "rb"), &fclose);
     if (!input) {
-        std::cout << "Kaynak dosya acilamadi" << std::endl;
+        std::cout << "The source file could not be opened" << std::endl;
         return false;
     }
 
     std::array<unsigned char, XOR_SALT_SIZE> salt {};
     if (RAND_bytes(salt.data(), static_cast<int>(salt.size())) != 1) {
-        std::cout << "Salt uretilemedi" << std::endl;
+        std::cout << "The salt could not be generated" << std::endl;
         return false;
     }
 
     XorKeys keys;
     if (!derive_xor_keys(key, salt, keys)) {
-        std::cout << "XOR anahtarlari turetilemedi" << std::endl;
+        std::cout << "The XOR keys could not be derived" << std::endl;
         return false;
     }
 
     FileGuard temporary_guard(temporary_path);
     std::unique_ptr<FILE, decltype(&fclose)> output(fopen(temporary_path.string().c_str(), "wb"), &fclose);
     if (!output) {
-        std::cout << "Gecici dosya olusturulamadi" << std::endl;
+        std::cout << "The temporary file could not be created" << std::endl;
         return false;
     }
 
     HmacSha256 hmac;
     if (!hmac.initialize(keys.authentication)) {
-        std::cout << "HMAC baslatilamadi" << std::endl;
+        std::cout << "HMAC could not be initialized" << std::endl;
         return false;
     }
 
@@ -656,13 +682,13 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
 
         if (!hmac.update(buffer.data(), bytes_read) ||
             fwrite(buffer.data(), 1, bytes_read, output.get()) != bytes_read) {
-            std::cout << "XOR verisi yazilamadi" << std::endl;
+            std::cout << "XOR data could not be written" << std::endl;
             return false;
         }
     }
 
     if (ferror(input.get())) {
-        std::cout << "Kaynak dosya okunamadi" << std::endl;
+        std::cout << "The source file could not be read" << std::endl;
         return false;
     }
 
@@ -670,7 +696,7 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
     if (fwrite(salt.data(), 1, salt.size(), output.get()) != salt.size() ||
         !hmac.update(salt.data(), salt.size()) ||
         !hmac.update(footer_bytes.data(), footer_bytes.size())) {
-        std::cout << "XOR metadata yazilamadi" << std::endl;
+        std::cout << "XOR metadata could not be written" << std::endl;
         return false;
     }
 
@@ -678,7 +704,7 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
     if (!hmac.finish(tag) ||
         fwrite(tag.data(), 1, tag.size(), output.get()) != tag.size() ||
         !write_footer(output.get(), XOR_CIPHER_ID) || !finish_file(output.get())) {
-        std::cout << "XOR dosyasi tamamlanamadi" << std::endl;
+        std::cout << "The XOR file could not be finalized" << std::endl;
         return false;
     }
 
@@ -688,13 +714,13 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
     std::error_code rename_error;
     std::filesystem::rename(temporary_path, output_path, rename_error);
     if (rename_error) {
-        std::cout << "Gecici dosya yeniden adlandirilamadi" << std::endl;
+        std::cout << "The temporary file could not be renamed" << std::endl;
         return false;
     }
     temporary_guard.success = true;
 
     if (delete_original && !delete_file(file_path)) {
-        std::cout << "Sifreleme tamamlandi ancak orijinal dosya silinemedi" << std::endl;
+        std::cout << "Encryption succeeded, but the original file could not be deleted" << std::endl;
         return false;
     }
     return true;
@@ -703,20 +729,20 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
 bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::string key, bool delete_original,
                                      std::filesystem::path destination_path) {
     if (key.empty()) {
-        std::cout << "Sifre bos olamaz" << std::endl;
+        std::cout << "Password cannot be empty" << std::endl;
         return false;
     }
 
     std::unique_ptr<FILE, decltype(&fclose)> input(fopen(file_path.string().c_str(), "rb"), &fclose);
     if (!input) {
-        std::cout << "Sifreli dosya acilamadi" << std::endl;
+        std::cout << "The encrypted file could not be opened" << std::endl;
         return false;
     }
 
     const std::uintmax_t file_size = std::filesystem::file_size(file_path);
     const std::uintmax_t metadata_size = XOR_SALT_SIZE + XOR_TAG_SIZE + FOOTER_SIZE;
     if (file_size < metadata_size) {
-        std::cout << "Gecersiz XOR dosya boyutu" << std::endl;
+        std::cout << "Invalid XOR file size" << std::endl;
         return false;
     }
     const std::uintmax_t ciphertext_size = file_size - metadata_size;
@@ -724,12 +750,12 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
     Footer footer;
     if (!read_footer(input.get(), footer) || footer.magic != FOOTER_MAGIC ||
         footer.version != FORMAT_VERSION || footer.cipher_id != XOR_CIPHER_ID) {
-        std::cout << "Gecersiz XOR footer" << std::endl;
+        std::cout << "Invalid XOR footer" << std::endl;
         return false;
     }
 
     if (_fseeki64(input.get(), static_cast<std::int64_t>(ciphertext_size), SEEK_SET) != 0) {
-        std::cout << "XOR metadata konumuna gidilemedi" << std::endl;
+        std::cout << "The XOR metadata location could not be reached" << std::endl;
         return false;
     }
 
@@ -737,19 +763,19 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
     std::array<unsigned char, XOR_TAG_SIZE> stored_tag {};
     if (fread(salt.data(), 1, salt.size(), input.get()) != salt.size() ||
         fread(stored_tag.data(), 1, stored_tag.size(), input.get()) != stored_tag.size()) {
-        std::cout << "XOR metadata okunamadi" << std::endl;
+        std::cout << "XOR metadata could not be read" << std::endl;
         return false;
     }
 
     XorKeys keys;
     if (!derive_xor_keys(key, salt, keys)) {
-        std::cout << "XOR anahtarlari turetilemedi" << std::endl;
+        std::cout << "The XOR keys could not be derived" << std::endl;
         return false;
     }
 
     HmacSha256 hmac;
     if (!hmac.initialize(keys.authentication) || _fseeki64(input.get(), 0, SEEK_SET) != 0) {
-        std::cout << "HMAC dogrulamasi baslatilamadi" << std::endl;
+        std::cout << "HMAC verification could not be initialized" << std::endl;
         return false;
     }
 
@@ -760,7 +786,7 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
             std::min<std::uintmax_t>(buffer.size(), ciphertext_size - authenticated_bytes));
         const std::size_t bytes_read = fread(buffer.data(), 1, to_read, input.get());
         if (bytes_read != to_read || !hmac.update(buffer.data(), bytes_read)) {
-            std::cout << "XOR verisi dogrulanamadi" << std::endl;
+            std::cout << "XOR data could not be authenticated" << std::endl;
             return false;
         }
         authenticated_bytes += bytes_read;
@@ -772,7 +798,7 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
         !hmac.update(footer_bytes.data(), footer_bytes.size()) ||
         !hmac.finish(calculated_tag) ||
         CRYPTO_memcmp(stored_tag.data(), calculated_tag.data(), stored_tag.size()) != 0) {
-        std::cout << "Sifre yanlis veya dosya bozulmus" << std::endl;
+        std::cout << "The password is incorrect or the file is corrupted" << std::endl;
         return false;
     }
 
@@ -784,7 +810,7 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
     std::filesystem::path temporary_path = output_path;
     temporary_path += ".tmp";
     if (std::filesystem::exists(output_path) || std::filesystem::exists(temporary_path)) {
-        std::cout << "Cozulmus hedef dosya zaten mevcut" << std::endl;
+        std::cout << "The decrypted destination file already exists" << std::endl;
         return false;
     }
 
@@ -794,7 +820,7 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
     FileGuard temporary_guard(temporary_path);
     std::unique_ptr<FILE, decltype(&fclose)> output(fopen(temporary_path.string().c_str(), "wb"), &fclose);
     if (!output) {
-        std::cout << "Gecici cozulmus dosya olusturulamadi" << std::endl;
+        std::cout << "The temporary decrypted file could not be created" << std::endl;
         return false;
     }
 
@@ -805,7 +831,7 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
             std::min<std::uintmax_t>(buffer.size(), ciphertext_size - decrypted_bytes));
         const std::size_t bytes_read = fread(buffer.data(), 1, to_read, input.get());
         if (bytes_read != to_read) {
-            std::cout << "XOR verisi okunamadi" << std::endl;
+            std::cout << "XOR data could not be read" << std::endl;
             return false;
         }
         for (std::size_t i = 0; i < bytes_read; ++i) {
@@ -813,14 +839,14 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
             ++key_index;
         }
         if (fwrite(buffer.data(), 1, bytes_read, output.get()) != bytes_read) {
-            std::cout << "Cozulmus XOR verisi yazilamadi" << std::endl;
+            std::cout << "Decrypted XOR data could not be written" << std::endl;
             return false;
         }
         decrypted_bytes += bytes_read;
     }
 
     if (!finish_file(output.get())) {
-        std::cout << "Cozulmus XOR dosyasi tamamlanamadi" << std::endl;
+        std::cout << "The decrypted XOR file could not be finalized" << std::endl;
         return false;
     }
     output.reset();
@@ -829,13 +855,13 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
     std::error_code rename_error;
     std::filesystem::rename(temporary_path, output_path, rename_error);
     if (rename_error) {
-        std::cout << "Gecici cozulmus dosya yeniden adlandirilamadi" << std::endl;
+        std::cout << "The temporary decrypted file could not be renamed" << std::endl;
         return false;
     }
     temporary_guard.success = true;
 
     if (delete_original && !delete_file(file_path)) {
-        std::cout << "Dosya cozuldu ancak sifreli dosya silinemedi" << std::endl;
+        std::cout << "Decryption succeeded, but the encrypted file could not be deleted" << std::endl;
         return false;
     }
     return true;

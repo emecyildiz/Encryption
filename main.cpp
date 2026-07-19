@@ -5,7 +5,7 @@
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     AppWindow application;
     if (!application.init()) {
-        MessageBoxW(nullptr, L"KASA arayuzu baslatilamadi.", L"KASA",
+        MessageBoxW(nullptr, L"The KASA interface could not be initialized.", L"KASA",
                     MB_OK | MB_ICONERROR);
         return 1;
     }

@@ -1,0 +1,27 @@
+# IDE and local configuration
+/.idea/
+/.vscode/
+
+# CMake build trees
+/build/
+/cmake-build-*/
+/out/
+
+# Local release packages
+/dist/
+
+# Generated binaries and libraries
+*.exe
+*.dll
+*.a
+*.lib
+*.pdb
+
+# KASA outputs and interrupted temporary files
+*.kasa
+*.tmp
+
+# Operating-system files
+Thumbs.db
+Desktop.ini
+.DS_Store
