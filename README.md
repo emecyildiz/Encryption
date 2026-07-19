@@ -86,6 +86,30 @@ ctest --test-dir build --output-on-failure
 4. Start the operation from the button at the bottom of the Sources card.
 5. Review the result and choose where the output should be saved.
 
+## Windows downloads
+
+GitHub Releases provides two distribution formats:
+
+- `KASA-Setup-1.0.0.exe` is recommended for most users. It installs KASA for
+  the current Windows account, creates a Start menu shortcut, optionally creates
+  a desktop shortcut, and includes an uninstaller.
+- `KASA-1.0.0-windows-x64.zip` is the portable build. Extract the complete
+  archive before running `KASA.exe`; the DLL files beside it are required.
+
+The current binaries are not code-signed, so Windows may display an unknown
+publisher warning.
+
+## Build the Windows installer
+
+After generating the standalone Release folder, compile the Inno Setup script:
+
+```powershell
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\KASA.iss
+```
+
+The resulting installer is written to `dist/KASA-Setup-1.0.0.exe`. See
+`installer/README.md` for version-update instructions.
+
 ## Built with Codex
 
 KASA was developed for OpenAI Build Week with Codex and GPT-5.6. Codex was used

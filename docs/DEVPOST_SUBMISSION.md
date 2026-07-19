@@ -81,6 +81,7 @@ unnecessary online AI dependency.
 - Regression tests for binary and empty-file round trips, wrong passwords,
   modified ciphertext, invalid footers, and automatic cipher detection.
 - A compact standalone Windows Release package with third-party license notices.
+- A tested per-user Windows installer with shortcuts and clean uninstallation.
 - A coherent local-first interface rather than a command-line proof of concept.
 
 ## What we learned
