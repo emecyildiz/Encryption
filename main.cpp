@@ -1,11 +1,14 @@
 #include "AppWindow.h"
+
 #include <windows.h>
-#include "encryption_engine.h"
 
-
-int main() {
-    encryption_engine eng;
-    eng.dencrypt_aes256( "C:/Users/Lenovo/OneDrive/Desktop/test aes.txt.kasa", "123456");
-
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+    AppWindow application;
+    if (!application.init()) {
+        MessageBoxW(nullptr, L"KASA arayuzu baslatilamadi.", L"KASA",
+                    MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    application.run();
     return 0;
 }

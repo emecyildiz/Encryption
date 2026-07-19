@@ -13,7 +13,7 @@ find_package(imgui CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(GLEW REQUIRED)
 
-add_executable(encryption main.cpp
+add_executable(encryption WIN32 main.cpp
         encryption_engine.cpp
         encryption_engine.h
         AppWindow.cpp
