@@ -1,4 +1,5 @@
 #include "AppWindow.h"
+#include "resources/resource.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
@@ -87,6 +88,48 @@ namespace {
             if (ImGui::CalcTextSize(candidate.c_str()).x <= maximum_width) return candidate;
         }
         return std::string(ellipsis);
+    }
+
+    void pushModalStyle() {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 20.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26.0f, 24.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 11.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(16.0f, 11.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.0f, 12.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.055f, 0.075f, 0.135f, 0.99f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.28f, 0.34f, 0.52f, 0.72f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.18f, 0.30f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.27f, 0.43f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.16f, 0.38f, 0.50f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.015f, 0.025f, 0.060f, 0.78f));
+    }
+
+    void popModalStyle() {
+        ImGui::PopStyleColor(6);
+        ImGui::PopStyleVar(6);
+    }
+
+    void drawModalAccent(const ImVec4& color) {
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const ImVec2 position = ImGui::GetWindowPos();
+        const ImVec2 size = ImGui::GetWindowSize();
+        draw->AddRectFilled(position + ImVec2(24.0f, 0.0f),
+                            position + ImVec2(size.x - 24.0f, 3.0f),
+                            ImGui::GetColorU32(color), 3.0f);
+    }
+
+    void beginModalMessageCard(const char* id) {
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 14.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 15.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.035f, 0.052f, 0.105f, 0.92f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.30f, 0.46f, 0.62f));
+        ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+                          ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY |
+                              ImGuiChildFlags_AlwaysUseWindowPadding,
+                          ImGuiWindowFlags_NoScrollbar);
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
     }
 
     std::filesystem::path pathFromUtf8(std::string_view value) {
@@ -282,6 +325,17 @@ bool AppWindow::init() {
     if (!window) {
         return false;
     }
+
+    const HWND native_window = glfwGetWin32Window(window);
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    const auto large_icon = reinterpret_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(IDI_KASA_ICON), IMAGE_ICON,
+        GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_SHARED));
+    const auto small_icon = reinterpret_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(IDI_KASA_ICON), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+    if (large_icon) SendMessageW(native_window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(large_icon));
+    if (small_icon) SendMessageW(native_window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small_icon));
 
     glfwMakeContextCurrent(window);
     glfwSetWindowUserPointer(window, this);
@@ -858,18 +912,32 @@ void AppWindow::renderFailureModal() {
         failure_modal_pending = false;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(470.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(470.0f, 0.0f), ImVec2(540.0f, FLT_MAX));
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
+    pushModalStyle();
     if (ImGui::BeginPopupModal("Operation failed", nullptr,
-                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-        ImGui::TextColored(COLOR_ERROR, "%s", failure_modal_title.c_str());
-        ImGui::Spacing();
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoTitleBar)) {
+        drawModalAccent(COLOR_ERROR);
+        ImGui::TextColored(COLOR_ERROR, "ACTION NEEDED");
+        if (heading_font) ImGui::PushFont(heading_font);
+        ImGui::TextUnformatted(failure_modal_title.c_str());
+        if (heading_font) ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        beginModalMessageCard("FailureMessage");
+        ImGui::PushStyleColor(ImGuiCol_Text, COLOR_MUTED);
         ImGui::TextWrapped("%s", failure_modal_message.c_str());
-        ImGui::Spacing();
-        if (ImGui::Button("OK", ImVec2(-1.0f, 40.0f))) ImGui::CloseCurrentPopup();
+        ImGui::PopStyleColor();
+        ImGui::EndChild();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.56f, 0.20f, 0.28f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.25f, 0.34f, 1.0f));
+        if (ImGui::Button("Got it", ImVec2(-1.0f, 44.0f))) ImGui::CloseCurrentPopup();
+        ImGui::PopStyleColor(2);
         ImGui::EndPopup();
     }
+    popModalStyle();
 }
 
 void AppWindow::renderSuccessModal() {
@@ -878,18 +946,33 @@ void AppWindow::renderSuccessModal() {
         success_modal_pending = false;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(470.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(470.0f, 0.0f), ImVec2(540.0f, FLT_MAX));
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
+    pushModalStyle();
     if (ImGui::BeginPopupModal("Operation complete", nullptr,
-                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-        ImGui::TextColored(COLOR_SUCCESS, "%s", success_modal_title.c_str());
-        ImGui::Spacing();
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoTitleBar)) {
+        drawModalAccent(COLOR_SUCCESS);
+        ImGui::TextColored(COLOR_SUCCESS, "COMPLETED");
+        if (heading_font) ImGui::PushFont(heading_font);
+        ImGui::TextUnformatted(success_modal_title.c_str());
+        if (heading_font) ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        beginModalMessageCard("SuccessMessage");
+        ImGui::PushStyleColor(ImGuiCol_Text, COLOR_MUTED);
         ImGui::TextWrapped("%s", success_modal_message.c_str());
-        ImGui::Spacing();
-        if (ImGui::Button("OK", ImVec2(-1.0f, 40.0f))) ImGui::CloseCurrentPopup();
+        ImGui::PopStyleColor();
+        ImGui::EndChild();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.54f, 0.40f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.66f, 0.48f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 1.0f, 0.98f, 1.0f));
+        if (ImGui::Button("Continue", ImVec2(-1.0f, 44.0f))) ImGui::CloseCurrentPopup();
+        ImGui::PopStyleColor(3);
         ImGui::EndPopup();
     }
+    popModalStyle();
 }
 
 void AppWindow::renderMixedFolderModal() {
@@ -898,17 +981,32 @@ void AppWindow::renderMixedFolderModal() {
         mixed_folder_modal_pending = false;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(500.0f, 0.0f), ImVec2(570.0f, FLT_MAX));
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
+    pushModalStyle();
     if (ImGui::BeginPopupModal("Mixed folder detected", nullptr,
-                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoTitleBar)) {
+        drawModalAccent(COLOR_VIOLET);
+        ImGui::TextColored(COLOR_VIOLET, "CHOOSE WORKFLOW");
+        if (heading_font) ImGui::PushFont(heading_font);
+        ImGui::TextUnformatted("Mixed folder detected");
+        if (heading_font) ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        beginModalMessageCard("MixedFolderMessage");
+        ImGui::PushStyleColor(ImGuiCol_Text, COLOR_MUTED);
         ImGui::TextWrapped("This folder contains both regular files and .kasa files. "
-                           "Choose which operation you want to perform.");
-        ImGui::Spacing();
+                           "Choose what KASA should do with this selection.");
+        ImGui::PopStyleColor();
+        ImGui::EndChild();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+
         const std::string protect_label = "Protect regular files (" +
-                                          std::to_string(pending_regular_files.size()) + ")";
-        if (ImGui::Button(protect_label.c_str(), ImVec2(-1.0f, 42.0f))) {
+                                           std::to_string(pending_regular_files.size()) + ")";
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.51f, 0.62f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.64f, 0.74f, 1.0f));
+        if (ImGui::Button(protect_label.c_str(), ImVec2(-1.0f, 46.0f))) {
             const std::vector<std::filesystem::path> selected = pending_regular_files;
             pending_regular_files.clear();
             pending_kasa_files.clear();
@@ -916,9 +1014,14 @@ void AppWindow::renderMixedFolderModal() {
             for (const auto& selected_path : selected) addFile(selected_path);
             ImGui::CloseCurrentPopup();
         }
+        ImGui::PopStyleColor(2);
+        ImGui::TextColored(COLOR_MUTED, "Encrypt regular files and leave existing .kasa files unchanged.");
+
         const std::string unlock_label = "Unlock .kasa files (" +
-                                         std::to_string(pending_kasa_files.size()) + ")";
-        if (ImGui::Button(unlock_label.c_str(), ImVec2(-1.0f, 42.0f))) {
+                                          std::to_string(pending_kasa_files.size()) + ")";
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.39f, 0.27f, 0.70f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.35f, 0.84f, 1.0f));
+        if (ImGui::Button(unlock_label.c_str(), ImVec2(-1.0f, 46.0f))) {
             const std::vector<std::filesystem::path> selected = pending_kasa_files;
             pending_regular_files.clear();
             pending_kasa_files.clear();
@@ -926,13 +1029,17 @@ void AppWindow::renderMixedFolderModal() {
             for (const auto& selected_path : selected) addFile(selected_path);
             ImGui::CloseCurrentPopup();
         }
-        if (ImGui::Button("Cancel", ImVec2(-1.0f, 36.0f))) {
+        ImGui::PopStyleColor(2);
+        ImGui::TextColored(COLOR_MUTED, "Decrypt authenticated .kasa files and leave regular files unchanged.");
+        ImGui::Dummy(ImVec2(0.0f, 2.0f));
+        if (ImGui::Button("Cancel", ImVec2(-1.0f, 40.0f))) {
             pending_regular_files.clear();
             pending_kasa_files.clear();
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
+    popModalStyle();
 }
 
 void AppWindow::setMode(UiMode new_mode) {

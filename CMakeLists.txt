@@ -16,9 +16,15 @@ add_library(kasa_engine STATIC
 target_include_directories(kasa_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kasa_engine PUBLIC OpenSSL::Crypto)
 
+set(KASA_PLATFORM_RESOURCES)
+if(WIN32)
+    list(APPEND KASA_PLATFORM_RESOURCES resources/KASA.rc)
+endif()
+
 add_executable(encryption WIN32 main.cpp
         AppWindow.cpp
-        AppWindow.h)
+        AppWindow.h
+        ${KASA_PLATFORM_RESOURCES})
 
 target_link_libraries(encryption PRIVATE
         kasa_engine
