@@ -97,7 +97,10 @@ namespace {
         const bool accepted = engine.process_file(encrypted, "wrong-password",
                                                   ActionType::DECRYPT, CipherType::AES256,
                                                   false, rejected);
-        return expect(!accepted && !std::filesystem::exists(rejected),
+        auto temporary = rejected;
+        temporary += ".tmp";
+        return expect(!accepted && !std::filesystem::exists(rejected) &&
+                          !std::filesystem::exists(temporary),
                       label + ": reject a wrong password without leaving output");
     }
 
@@ -117,7 +120,10 @@ namespace {
         const bool accepted = engine.process_file(encrypted, "tamper-test-password",
                                                   ActionType::DECRYPT, CipherType::AES256,
                                                   false, rejected);
-        return expect(!accepted && !std::filesystem::exists(rejected),
+        auto temporary = rejected;
+        temporary += ".tmp";
+        return expect(!accepted && !std::filesystem::exists(rejected) &&
+                          !std::filesystem::exists(temporary),
                       label + ": reject modified data without leaving output");
     }
 
@@ -129,6 +135,101 @@ namespace {
         if (!writeBytes(fake_kasa, content)) return false;
         return expect(!engine.inspect_file(fake_kasa).has_value(),
                       "Footer inspection: reject an unsupported .kasa file");
+    }
+
+    bool runUnicodePathTest() {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / std::filesystem::path(L"özel-dosya-şifreleme.txt");
+        const auto encrypted = workspace.path / std::filesystem::path(L"özel-dosya-şifreleme.txt.kasa");
+        const auto decrypted = workspace.path / std::filesystem::path(L"çözülmüş-dosya.txt");
+        const std::vector<std::uint8_t> content {0x4b, 0x41, 0x53, 0x41, 0x00, 0xff};
+
+        if (!expect(writeBytes(source, content), "Unicode paths: create source")) return false;
+        if (!expect(engine.process_file(source, "unicode-password", ActionType::ENCRYPT,
+                                        CipherType::AES256, false, encrypted),
+                    "Unicode paths: encrypt")) return false;
+        if (!expect(engine.process_file(encrypted, "unicode-password", ActionType::DECRYPT,
+                                        CipherType::AES256, false, decrypted),
+                    "Unicode paths: decrypt")) return false;
+        return expect(readBytes(decrypted) == content, "Unicode paths: preserve every byte");
+    }
+
+    bool runCaseInsensitiveExtensionTest() {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / "uppercase-extension.txt";
+        const auto encrypted = workspace.path / "uppercase-extension.KASA";
+        const auto decrypted = workspace.path / "uppercase-extension-restored.txt";
+        const std::vector<std::uint8_t> content(64, 0x31);
+
+        if (!writeBytes(source, content)) return false;
+        if (!engine.process_file(source, "extension-password", ActionType::ENCRYPT,
+                                 CipherType::AES256, false, encrypted)) return false;
+        if (!expect(engine.process_file(encrypted, "extension-password", ActionType::DECRYPT,
+                                        CipherType::XOR, false, decrypted),
+                    "Uppercase extension: decrypt based on authenticated footer")) return false;
+        return expect(readBytes(decrypted) == content,
+                      "Uppercase extension: preserve every byte");
+    }
+
+    bool runTruncatedFormatTest() {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto truncated = workspace.path / "truncated.kasa";
+        const std::vector<std::uint8_t> fake_footer {
+            'K', 'A', 'S', 'A', 1, 2
+        };
+        if (!writeBytes(truncated, fake_footer)) return false;
+        return expect(!engine.inspect_file(truncated).has_value(),
+                      "Format inspection: reject a truncated file with a valid-looking footer");
+    }
+
+    bool runTemporaryCollisionTest() {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / "collision-source.txt";
+        const auto encrypted = workspace.path / "collision-source.txt.kasa";
+        auto temporary = encrypted;
+        temporary += ".tmp";
+        const std::vector<std::uint8_t> source_content(32, 0x41);
+        const std::vector<std::uint8_t> sentinel(32, 0x7c);
+
+        if (!writeBytes(source, source_content) || !writeBytes(temporary, sentinel)) return false;
+        const bool encrypted_existing_temporary = engine.process_file(
+            source, "collision-password", ActionType::ENCRYPT, CipherType::AES256,
+            false, encrypted);
+        return expect(!encrypted_existing_temporary && readBytes(temporary) == sentinel,
+                      "Temporary output: never overwrite a pre-existing file");
+    }
+
+    bool runHardLinkDeletionTest() {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / "hard-link-source.txt";
+        const auto link = workspace.path / "hard-link-copy.txt";
+        const std::vector<std::uint8_t> content(128, 0x5e);
+        if (!writeBytes(source, content)) return false;
+
+        std::error_code link_error;
+        std::filesystem::create_hard_link(source, link, link_error);
+        if (link_error) {
+            std::cerr << "SKIP: hard-link deletion test: " << link_error.message() << '\n';
+            return true;
+        }
+
+        const bool deleted = engine.delete_file(source);
+        return expect(!deleted && readBytes(source) == content && readBytes(link) == content,
+                      "Source deletion: refuse to overwrite multiply-linked data");
+    }
+
+    bool runSingleLinkDeletionTest() {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / "single-link-source.txt";
+        if (!writeBytes(source, std::vector<std::uint8_t>(8192, 0xa7))) return false;
+        return expect(engine.delete_file(source) && !std::filesystem::exists(source),
+                      "Source deletion: overwrite and remove a single-link file");
     }
 }
 
@@ -146,6 +247,12 @@ int main() {
     passed &= runWrongPasswordTest(CipherType::XOR, "XOR wrong password");
     passed &= runTamperTest(CipherType::XOR, "XOR tamper detection");
     passed &= runInvalidFooterTest();
+    passed &= runUnicodePathTest();
+    passed &= runCaseInsensitiveExtensionTest();
+    passed &= runTruncatedFormatTest();
+    passed &= runTemporaryCollisionTest();
+    passed &= runHardLinkDeletionTest();
+    passed &= runSingleLinkDeletionTest();
 
     if (!passed) return 1;
     std::cout << "All KASA encryption engine tests passed.\n";

@@ -16,11 +16,15 @@
 #include <cstdint>
 #include <algorithm>
 #include <climits>
+#include <fcntl.h>
+#include <memory>
+#include <windows.h>
 
 using namespace std;
 
 struct FileGuard {
     std::filesystem::path target_path;
+    bool owns_file = false;
     bool success = false;
 
     // Store the target path when the guard is created.
@@ -28,7 +32,7 @@ struct FileGuard {
 
     // The temporary file is removed automatically, regardless of how the function exits.
     ~FileGuard() noexcept {
-        if (!success) {
+        if (owns_file && !success) {
             std::error_code error;
             std::filesystem::remove(target_path, error);
         }
@@ -50,6 +54,32 @@ namespace {
     constexpr std::size_t AES_TAG_SIZE = 16;
     constexpr std::size_t AES_KEY_SIZE = 32;
     constexpr int AES_KDF_ITERATIONS = 100000;
+
+    std::unique_ptr<FILE, decltype(&fclose)> open_file(
+        const std::filesystem::path& path, const wchar_t* mode) {
+        return {::_wfopen(path.c_str(), mode), &fclose};
+    }
+
+    std::unique_ptr<FILE, decltype(&fclose)> create_new_binary_file(
+        const std::filesystem::path& path) {
+        const HANDLE handle = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                                            CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) return {nullptr, &fclose};
+
+        const int descriptor = ::_open_osfhandle(reinterpret_cast<std::intptr_t>(handle),
+                                                  _O_BINARY | _O_WRONLY);
+        if (descriptor == -1) {
+            ::CloseHandle(handle);
+            return {nullptr, &fclose};
+        }
+
+        FILE* file = ::_fdopen(descriptor, "wb");
+        if (!file) {
+            ::_close(descriptor);
+            return {nullptr, &fclose};
+        }
+        return {file, &fclose};
+    }
 
     static_assert(FOOTER_SIZE == 6, "Unexpected KASA footer size");
 
@@ -201,8 +231,7 @@ std::optional<KasaFileInfo> encryption_engine::inspect_file(
     const std::uintmax_t file_size = std::filesystem::file_size(file_path, size_error);
     if (size_error || file_size < FOOTER_SIZE) return std::nullopt;
 
-    std::unique_ptr<FILE, decltype(&fclose)> file(
-        fopen(file_path.string().c_str(), "rb"), &fclose);
+    auto file = open_file(file_path, L"rb");
     if (!file) return std::nullopt;
 
     Footer footer;
@@ -213,8 +242,12 @@ std::optional<KasaFileInfo> encryption_engine::inspect_file(
 
     switch (footer.cipher_id) {
         case XOR_CIPHER_ID:
+            if (file_size < XOR_SALT_SIZE + XOR_TAG_SIZE + FOOTER_SIZE) return std::nullopt;
             return KasaFileInfo {footer.version, CipherType::XOR};
         case AES256_CIPHER_ID:
+            if (file_size < AES_SALT_SIZE + AES_NONCE_SIZE + AES_TAG_SIZE + FOOTER_SIZE) {
+                return std::nullopt;
+            }
             return KasaFileInfo {footer.version, CipherType::AES256};
         default:
             return std::nullopt;
@@ -252,7 +285,7 @@ void encryption_engine::scan_and_process(std::filesystem::path root_path, std::s
 }
 
 
-bool encryption_engine::process_file(std::filesystem::path file_path, std::string key, ActionType action,
+bool encryption_engine::process_file(std::filesystem::path file_path, const std::string& key, ActionType action,
                                      CipherType cipher, bool delete_original,
                                      std::filesystem::path destination_path) {
     switch (action) {
@@ -264,12 +297,13 @@ bool encryption_engine::process_file(std::filesystem::path file_path, std::strin
                     return encrypt_xor(file_path, key, delete_original, destination_path);
             }
         case ActionType::DECRYPT: {
-            std::unique_ptr<FILE, decltype(&fclose)> file(fopen(file_path.string().c_str(), "rb"), &fclose);
+            auto file = open_file(file_path, L"rb");
             if (!file) {
                 return false;
             }
-            std::uintmax_t file_size = std::filesystem::file_size(file_path);
-            if (file_size < FOOTER_SIZE) {
+            std::error_code size_error;
+            const std::uintmax_t file_size = std::filesystem::file_size(file_path, size_error);
+            if (size_error || file_size < FOOTER_SIZE) {
                 return false;
             }
             Footer footer;
@@ -298,42 +332,49 @@ bool encryption_engine::process_file(std::filesystem::path file_path, std::strin
 
 
 bool encryption_engine::delete_file(std::filesystem::path file_path) {
-    std::unique_ptr<FILE, decltype(&fclose)> file(fopen(file_path.string().c_str(),"r+b"),&fclose);
-    if (file == nullptr) {
+    std::error_code link_error;
+    if (std::filesystem::is_symlink(std::filesystem::symlink_status(file_path, link_error)) ||
+        link_error) {
+        // Following a symbolic link and overwriting its target would destroy a
+        // different file than the path the user selected.
         return false;
     }
-    if (_fseeki64(file.get(), 0, SEEK_END) != 0) {
-        std::cout << "fseek failed delete" << std::endl;
-        return false;
-    }
-    const std::int64_t file_size = _ftelli64(file.get());
-    if (file_size < 0 || _fseeki64(file.get(), 0, SEEK_SET) != 0) {
-        std::cout << "file size failed delete" << std::endl;
-        return false;
-    }
-    unsigned char buffer[4096] = {0};
 
-    std::int64_t write_size = 0;
-    while (write_size < file_size) {
-        const std::size_t written = static_cast<std::size_t>(
-            std::min<std::int64_t>(sizeof(buffer), file_size - write_size));
-        size_t btyes_written = fwrite(buffer, 1, written, file.get());
-        if (btyes_written != written) {
-            std::cout << "fwrite failed delete" << std::endl;
-            return false;
-        }
-        write_size += btyes_written;
-    }
-    if (!finish_file(file.get())) {
+    auto file = open_file(file_path, L"r+b");
+    if (!file) return false;
+
+    const auto native_handle = reinterpret_cast<HANDLE>(::_get_osfhandle(::_fileno(file.get())));
+    BY_HANDLE_FILE_INFORMATION information {};
+    if (native_handle == INVALID_HANDLE_VALUE ||
+        !::GetFileInformationByHandle(native_handle, &information) ||
+        information.nNumberOfLinks != 1) {
+        // Overwriting a multiply-linked file would also destroy the contents visible
+        // through every other hard link, so leave it untouched and report a warning.
         return false;
     }
+
+    if (_fseeki64(file.get(), 0, SEEK_END) != 0) return false;
+    const std::int64_t file_size = _ftelli64(file.get());
+    if (file_size < 0 || _fseeki64(file.get(), 0, SEEK_SET) != 0) return false;
+
+    std::array<unsigned char, 64 * 1024> zeroes {};
+    std::int64_t overwritten = 0;
+    while (overwritten < file_size) {
+        const std::size_t requested = static_cast<std::size_t>(
+            std::min<std::int64_t>(zeroes.size(), file_size - overwritten));
+        const std::size_t written = fwrite(zeroes.data(), 1, requested, file.get());
+        if (written != requested) return false;
+        overwritten += static_cast<std::int64_t>(written);
+    }
+    if (!finish_file(file.get())) return false;
     file.reset();
+
     std::error_code remove_error;
     const bool removed = std::filesystem::remove(file_path, remove_error);
     return removed && !remove_error;
 }
 
-bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::string key, bool delete_original,
+bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, const std::string& key, bool delete_original,
                                        std::filesystem::path destination_path) {
     if (key.empty()) {
         std::cout << "Password cannot be empty" << std::endl;
@@ -352,7 +393,7 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
         return false;
     }
 
-    std::unique_ptr<FILE, decltype(&fclose)> input(fopen(file_path.string().c_str(), "rb"), &fclose);
+    auto input = open_file(file_path, L"rb");
     if (!input) {
         std::cout << "The source file could not be opened" << std::endl;
         return false;
@@ -395,8 +436,13 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
     }
 
     FileGuard temporary_guard(temporary_path);
-    std::unique_ptr<FILE, decltype(&fclose)> output(fopen(temporary_path.string().c_str(), "wb"), &fclose);
-    if (!output || fwrite(salt.data(), 1, salt.size(), output.get()) != salt.size() ||
+    auto output = create_new_binary_file(temporary_path);
+    if (!output) {
+        std::cout << "The temporary AES file could not be created" << std::endl;
+        return false;
+    }
+    temporary_guard.owns_file = true;
+    if (fwrite(salt.data(), 1, salt.size(), output.get()) != salt.size() ||
         fwrite(nonce.data(), 1, nonce.size(), output.get()) != nonce.size()) {
         std::cout << "The temporary AES file could not be created" << std::endl;
         return false;
@@ -461,22 +507,23 @@ bool encryption_engine::encrypt_aes256(std::filesystem::path file_path, std::str
     return true;
 }
 
-bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::string key, bool delete_original,
+bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, const std::string& key, bool delete_original,
                                         std::filesystem::path destination_path) {
-    if (key.empty() || file_path.extension() != ".kasa") {
+    if (key.empty()) {
         std::cout << "Invalid AES decryption request" << std::endl;
         return false;
     }
 
-    std::unique_ptr<FILE, decltype(&fclose)> input(fopen(file_path.string().c_str(), "rb"), &fclose);
+    auto input = open_file(file_path, L"rb");
     if (!input) {
         std::cout << "The encrypted AES file could not be opened" << std::endl;
         return false;
     }
 
-    const std::uintmax_t file_size = std::filesystem::file_size(file_path);
+    std::error_code size_error;
+    const std::uintmax_t file_size = std::filesystem::file_size(file_path, size_error);
     const std::uintmax_t metadata_size = AES_SALT_SIZE + AES_NONCE_SIZE + AES_TAG_SIZE + FOOTER_SIZE;
-    if (file_size < metadata_size) {
+    if (size_error || file_size < metadata_size) {
         std::cout << "Invalid AES file size" << std::endl;
         return false;
     }
@@ -554,11 +601,12 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     }
 
     FileGuard temporary_guard(temporary_path);
-    std::unique_ptr<FILE, decltype(&fclose)> output(fopen(temporary_path.string().c_str(), "wb"), &fclose);
+    auto output = create_new_binary_file(temporary_path);
     if (!output) {
         std::cout << "The temporary decrypted AES file could not be created" << std::endl;
         return false;
     }
+    temporary_guard.owns_file = true;
 
     std::array<unsigned char, 4096> input_buffer {};
     std::array<unsigned char, 4096 + EVP_MAX_BLOCK_LENGTH> output_buffer {};
@@ -616,7 +664,7 @@ bool encryption_engine::dencrypt_aes256(std::filesystem::path file_path, std::st
     return true;
 }
 
-bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string key, bool delete_original,
+bool encryption_engine::encrypt_xor(std::filesystem::path file_path, const std::string& key, bool delete_original,
                                     std::filesystem::path destination_path) {
     if (key.empty()) {
         std::cout << "Password cannot be empty" << std::endl;
@@ -636,7 +684,7 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
         return false;
     }
 
-    std::unique_ptr<FILE, decltype(&fclose)> input(fopen(file_path.string().c_str(), "rb"), &fclose);
+    auto input = open_file(file_path, L"rb");
     if (!input) {
         std::cout << "The source file could not be opened" << std::endl;
         return false;
@@ -655,11 +703,12 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
     }
 
     FileGuard temporary_guard(temporary_path);
-    std::unique_ptr<FILE, decltype(&fclose)> output(fopen(temporary_path.string().c_str(), "wb"), &fclose);
+    auto output = create_new_binary_file(temporary_path);
     if (!output) {
         std::cout << "The temporary file could not be created" << std::endl;
         return false;
     }
+    temporary_guard.owns_file = true;
 
     HmacSha256 hmac;
     if (!hmac.initialize(keys.authentication)) {
@@ -726,22 +775,23 @@ bool encryption_engine::encrypt_xor(std::filesystem::path file_path, std::string
     return true;
 }
 
-bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::string key, bool delete_original,
+bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, const std::string& key, bool delete_original,
                                      std::filesystem::path destination_path) {
     if (key.empty()) {
         std::cout << "Password cannot be empty" << std::endl;
         return false;
     }
 
-    std::unique_ptr<FILE, decltype(&fclose)> input(fopen(file_path.string().c_str(), "rb"), &fclose);
+    auto input = open_file(file_path, L"rb");
     if (!input) {
         std::cout << "The encrypted file could not be opened" << std::endl;
         return false;
     }
 
-    const std::uintmax_t file_size = std::filesystem::file_size(file_path);
+    std::error_code size_error;
+    const std::uintmax_t file_size = std::filesystem::file_size(file_path, size_error);
     const std::uintmax_t metadata_size = XOR_SALT_SIZE + XOR_TAG_SIZE + FOOTER_SIZE;
-    if (file_size < metadata_size) {
+    if (size_error || file_size < metadata_size) {
         std::cout << "Invalid XOR file size" << std::endl;
         return false;
     }
@@ -818,11 +868,12 @@ bool encryption_engine::dencrypt_xor(std::filesystem::path file_path, std::strin
         return false;
     }
     FileGuard temporary_guard(temporary_path);
-    std::unique_ptr<FILE, decltype(&fclose)> output(fopen(temporary_path.string().c_str(), "wb"), &fclose);
+    auto output = create_new_binary_file(temporary_path);
     if (!output) {
         std::cout << "The temporary decrypted file could not be created" << std::endl;
         return false;
     }
+    temporary_guard.owns_file = true;
 
     std::uintmax_t decrypted_bytes = 0;
     std::size_t key_index = 0;

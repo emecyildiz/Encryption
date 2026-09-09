@@ -23,6 +23,8 @@ one workspace.
   partial output.
 - Wrong-password and file-tampering detection.
 - Multi-file and recursive-folder processing without uploading file contents.
+- Source-adjacent output by default, with relative folder structure preserved
+  when a different destination is chosen.
 - Selected-file count and total-size feedback before an operation starts.
 - A password-strength indicator for protection workflows.
 - A virtualized source list that remains responsive with large file sets.
@@ -84,7 +86,9 @@ ctest --test-dir build --output-on-failure
 2. KASA selects protection for normal files and unlock mode for `.kasa` files.
 3. Enter a password and keep AES-256-GCM selected for normal protection.
 4. Start the operation from the button at the bottom of the Sources card.
-5. Review the result and choose where the output should be saved.
+5. By default, KASA writes each successful output beside its source. Clear
+   `Keep outputs beside their source files` to choose a different destination;
+   folder selections retain their relative directory structure.
 
 ## Windows downloads
 

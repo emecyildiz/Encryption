@@ -30,13 +30,20 @@ private:
 
     struct SourceItem {
         std::filesystem::path path;
+        std::filesystem::path relative_path;
         std::uintmax_t size = 0;
         std::optional<KasaFileInfo> kasa_info;
+    };
+
+    struct PendingPath {
+        std::filesystem::path path;
+        std::filesystem::path relative_path;
     };
 
     struct OutputItem {
         std::filesystem::path source_path;
         std::filesystem::path output_path;
+        std::filesystem::path relative_path;
         std::string display_name;
         std::string message;
         ItemStatus status = ItemStatus::PROCESSING;
@@ -56,6 +63,7 @@ private:
     bool show_password = false;
     bool show_advanced = false;
     bool delete_original = false;
+    bool keep_source_location = true;
     std::array<char, 128> password {};
     std::array<char, 128> password_confirmation {};
 
@@ -70,6 +78,7 @@ private:
     std::atomic<std::size_t> processed_count {0};
     std::atomic<std::size_t> total_count {0};
     std::atomic<std::size_t> failed_count {0};
+    std::atomic<std::size_t> deletion_warning_count {0};
     mutable std::mutex state_mutex;
     std::string current_file;
     std::string notice;
@@ -80,8 +89,8 @@ private:
     std::string success_modal_title;
     std::string success_modal_message;
     bool mixed_folder_modal_pending = false;
-    std::vector<std::filesystem::path> pending_regular_files;
-    std::vector<std::filesystem::path> pending_kasa_files;
+    std::vector<PendingPath> pending_regular_files;
+    std::vector<PendingPath> pending_kasa_files;
 
     void setupImGui();
     void renderUI();
@@ -97,7 +106,8 @@ private:
 
     void setMode(UiMode new_mode);
     void addPath(const std::filesystem::path& path);
-    void addFile(const std::filesystem::path& path);
+    void addFile(const std::filesystem::path& path,
+                 std::filesystem::path relative_path = {});
     void clearSession();
     void startProcessing();
     void joinFinishedWorker();

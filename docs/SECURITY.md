@@ -66,10 +66,14 @@ is checked before decrypted output is accepted.
   the filename. Filename privacy is not currently a goal of format version 1.
 - File size is not hidden.
 - The password-strength indicator is guidance, not a formal entropy estimate.
-- The optional source-deletion feature cannot guarantee forensic erasure on
-  SSDs, copy-on-write file systems, backups, or synchronized folders.
-- Files are protected individually. KASA does not currently preserve a complete
-  directory tree as one encrypted archive.
+- The optional source-deletion feature performs one best-effort overwrite pass
+  before deletion and refuses to overwrite files with multiple hard links. This
+  can reduce simple recovery on conventional HDDs, but it is not guaranteed
+  secure erasure. It cannot remove copies retained by SSD wear levelling,
+  copy-on-write file systems, backups, synchronized folders, or recovery tools.
+- Files are protected individually. When a folder is selected, KASA recreates
+  its relative directory tree at the chosen destination, but it does not package
+  that tree into a single encrypted archive and does not preserve empty folders.
 - KASA currently targets Windows 10 and Windows 11.
 
 ## Reporting a security issue

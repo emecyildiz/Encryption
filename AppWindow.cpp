@@ -609,6 +609,11 @@ void AppWindow::renderSourcePanel() {
                          password_confirmation.size(), password_flags);
     }
     ImGui::Checkbox("Show password", &show_password);
+    ImGui::Checkbox("Keep outputs beside their source files", &keep_source_location);
+    if (keep_source_location) {
+        ImGui::TextColored(COLOR_MUTED,
+                           "Folder structure and source locations will be preserved.");
+    }
 
     if (mode == UiMode::PROTECT) {
         if (ImGui::TreeNodeEx("Advanced settings", ImGuiTreeNodeFlags_SpanAvailWidth)) {
@@ -629,8 +634,10 @@ void AppWindow::renderSourcePanel() {
         if (delete_original) {
             ImGui::TextColored(COLOR_WARNING,
                                "The source is deleted only after the encrypted output is saved successfully.");
+            ImGui::TextColored(COLOR_WARNING,
+                               "Best-effort overwrite is not guaranteed secure erasure on SSDs.");
         }
-    } else {
+    } else if (!keep_source_location) {
         ImGui::TextUnformatted("Decrypted file destination");
         const std::string destination = unlock_destination.empty()
             ? "No folder selected"
@@ -640,7 +647,13 @@ void AppWindow::renderSourcePanel() {
         ImGui::BeginDisabled(processing);
         if (ImGui::Button("Choose Destination")) chooseUnlockDestination();
         ImGui::EndDisabled();
+    }
+    if (mode == UiMode::UNLOCK) {
         ImGui::Checkbox("Delete the .kasa file after successful decryption", &delete_original);
+        if (delete_original) {
+            ImGui::TextColored(COLOR_WARNING,
+                               "Best-effort overwrite is not guaranteed secure erasure on SSDs.");
+        }
     }
 
     if (!notice.empty()) {
@@ -651,7 +664,8 @@ void AppWindow::renderSourcePanel() {
     const bool passwords_match = mode == UiMode::UNLOCK ||
                                  std::strcmp(password.data(), password_confirmation.data()) == 0;
     const bool can_start = !processing && !sources.empty() && password[0] != '\0' && passwords_match &&
-                           (mode == UiMode::PROTECT || !unlock_destination.empty());
+                           (mode == UiMode::PROTECT || keep_source_location ||
+                            !unlock_destination.empty());
     if (!passwords_match) {
         ImGui::TextColored(COLOR_ERROR, "Passwords do not match.");
     }
@@ -780,8 +794,11 @@ void AppWindow::renderOutputPanel() {
     ImGui::TextUnformatted("Outputs");
     if (heading_font) ImGui::PopFont();
     ImGui::TextColored(COLOR_MUTED,
-                       mode == UiMode::PROTECT ? "Save prepared encrypted files wherever you choose."
-                                               : "Verified files are written to your selected folder.");
+                       keep_source_location
+                           ? "Outputs keep the same folder locations as their sources."
+                           : mode == UiMode::PROTECT
+                                 ? "Save prepared encrypted files wherever you choose."
+                                 : "Verified files are written to your selected folder.");
 
     if (processing) {
         const std::size_t total = total_count.load();
@@ -1007,11 +1024,13 @@ void AppWindow::renderMixedFolderModal() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.51f, 0.62f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.64f, 0.74f, 1.0f));
         if (ImGui::Button(protect_label.c_str(), ImVec2(-1.0f, 46.0f))) {
-            const std::vector<std::filesystem::path> selected = pending_regular_files;
+            const std::vector<PendingPath> selected = pending_regular_files;
             pending_regular_files.clear();
             pending_kasa_files.clear();
             setMode(UiMode::PROTECT);
-            for (const auto& selected_path : selected) addFile(selected_path);
+            for (const auto& selected_path : selected) {
+                addFile(selected_path.path, selected_path.relative_path);
+            }
             ImGui::CloseCurrentPopup();
         }
         ImGui::PopStyleColor(2);
@@ -1022,11 +1041,13 @@ void AppWindow::renderMixedFolderModal() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.39f, 0.27f, 0.70f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.35f, 0.84f, 1.0f));
         if (ImGui::Button(unlock_label.c_str(), ImVec2(-1.0f, 46.0f))) {
-            const std::vector<std::filesystem::path> selected = pending_kasa_files;
+            const std::vector<PendingPath> selected = pending_kasa_files;
             pending_regular_files.clear();
             pending_kasa_files.clear();
             setMode(UiMode::UNLOCK);
-            for (const auto& selected_path : selected) addFile(selected_path);
+            for (const auto& selected_path : selected) {
+                addFile(selected_path.path, selected_path.relative_path);
+            }
             ImGui::CloseCurrentPopup();
         }
         ImGui::PopStyleColor(2);
@@ -1065,19 +1086,26 @@ void AppWindow::addPath(const std::filesystem::path& path) {
             return;
         }
         if (std::filesystem::is_directory(path)) {
-            std::vector<std::filesystem::path> regular_files;
-            std::vector<std::filesystem::path> kasa_files;
+            std::vector<PendingPath> regular_files;
+            std::vector<PendingPath> kasa_files;
             for (const auto& entry : std::filesystem::recursive_directory_iterator(
                      path, std::filesystem::directory_options::skip_permission_denied)) {
                 if (!entry.is_regular_file()) continue;
+
+                std::error_code relative_error;
+                std::filesystem::path relative_path = std::filesystem::relative(
+                    entry.path(), path, relative_error);
+                if (relative_error || relative_path.empty()) continue;
+                if (!path.filename().empty()) relative_path = path.filename() / relative_path;
 
                 std::string extension = entry.path().extension().string();
                 std::transform(extension.begin(), extension.end(), extension.begin(),
                                [](const unsigned char character) {
                                    return static_cast<char>(std::tolower(character));
                                });
-                if (extension == ".kasa") kasa_files.push_back(entry.path());
-                else regular_files.push_back(entry.path());
+                PendingPath pending {entry.path(), std::move(relative_path)};
+                if (extension == ".kasa") kasa_files.push_back(std::move(pending));
+                else regular_files.push_back(std::move(pending));
             }
 
             // Directory iteration order is unspecified. A mixed folder therefore needs
@@ -1093,14 +1121,17 @@ void AppWindow::addPath(const std::filesystem::path& path) {
             const auto& selected_files = !sources.empty() && mode == UiMode::UNLOCK
                                              ? kasa_files
                                              : regular_files.empty() ? kasa_files : regular_files;
-            for (const auto& selected_path : selected_files) addFile(selected_path);
+            for (const auto& selected_path : selected_files) {
+                addFile(selected_path.path, selected_path.relative_path);
+            }
         }
     } catch (const std::filesystem::filesystem_error& error) {
         notice = std::string("File scan failed: ") + error.what();
     }
 }
 
-void AppWindow::addFile(const std::filesystem::path& path) {
+void AppWindow::addFile(const std::filesystem::path& path,
+                        std::filesystem::path relative_path) {
     std::string extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    [](const unsigned char character) {
@@ -1134,9 +1165,15 @@ void AppWindow::addFile(const std::filesystem::path& path) {
         [&](const SourceItem& item) { return item.path == path; });
     if (duplicate != sources.end()) return;
 
+    if (relative_path.empty() || relative_path.is_absolute() ||
+        std::find(relative_path.begin(), relative_path.end(), std::filesystem::path("..")) !=
+            relative_path.end()) {
+        relative_path = path.filename();
+    }
+
     std::error_code size_error;
     const std::uintmax_t size = std::filesystem::file_size(path, size_error);
-    if (!size_error) sources.push_back({path, size, kasa_info});
+    if (!size_error) sources.push_back({path, std::move(relative_path), size, kasa_info});
 }
 
 void AppWindow::clearSession() {
@@ -1163,11 +1200,12 @@ void AppWindow::startProcessing() {
     if (processing) return;
     if (worker.joinable()) worker.join();
 
-    const std::vector<SourceItem> work_items = sources;
+    std::vector<SourceItem> work_items = sources;
     std::string password_value(password.data());
     const UiMode selected_mode = mode;
     const CipherType selected_cipher = cipher;
     const bool should_delete = delete_original;
+    const bool preserve_location = keep_source_location;
     const std::filesystem::path destination_folder = unlock_destination;
 
     {
@@ -1178,12 +1216,15 @@ void AppWindow::startProcessing() {
     processed_count = 0;
     total_count = work_items.size();
     failed_count = 0;
+    deletion_warning_count = 0;
     cancel_requested = false;
     processing = true;
     notice.clear();
 
-    worker = std::thread([this, work_items, password_value, selected_mode,
-                          selected_cipher, should_delete, destination_folder]() mutable {
+    worker = std::thread([this, work_items = std::move(work_items),
+                          password_value = std::move(password_value), selected_mode,
+                          selected_cipher, should_delete, preserve_location,
+                          destination_folder]() mutable {
         for (const SourceItem& source : work_items) {
             if (cancel_requested) break;
             {
@@ -1193,27 +1234,79 @@ void AppWindow::startProcessing() {
 
             OutputItem result;
             result.source_path = source.path;
-            result.delete_source_after_save = selected_mode == UiMode::PROTECT && should_delete;
+            result.delete_source_after_save = selected_mode == UiMode::PROTECT &&
+                                              should_delete && !preserve_location;
             bool success = false;
             try {
                 if (selected_mode == UiMode::PROTECT) {
-                    result.display_name = pathToUtf8(source.path.filename()) + ".kasa";
-                    result.output_path = uniquePath(staging_directory,
-                                                    pathFromUtf8(result.display_name));
+                    result.relative_path = source.relative_path;
+                    result.relative_path += ".kasa";
+                    const std::filesystem::path output_parent = preserve_location
+                        ? source.path.parent_path()
+                        : staging_directory / result.relative_path.parent_path();
+                    std::error_code directory_error;
+                    std::filesystem::create_directories(output_parent, directory_error);
+                    if (directory_error) throw std::filesystem::filesystem_error(
+                        "The output folder could not be created", output_parent, directory_error);
+                    result.output_path = uniquePath(output_parent,
+                                                    result.relative_path.filename());
+                    if (!preserve_location) {
+                        result.relative_path = std::filesystem::relative(
+                            result.output_path, staging_directory);
+                    } else {
+                        result.relative_path = result.output_path.filename();
+                    }
+                    result.display_name = pathToUtf8(result.relative_path);
                     success = engine.process_file(source.path, password_value, ActionType::ENCRYPT,
                                                   selected_cipher, false, result.output_path);
-                    result.staged = success;
-                    result.status = success ? ItemStatus::PENDING_SAVE : ItemStatus::FAILED;
-                    result.message = success ? "Ready to save" : "Encryption failed";
+                    bool source_deleted = true;
+                    if (success && preserve_location && should_delete) {
+                        source_deleted = engine.delete_file(source.path);
+                        if (!source_deleted) ++deletion_warning_count;
+                    }
+                    result.staged = success && !preserve_location;
+                    result.status = !success ? ItemStatus::FAILED
+                                             : preserve_location ? ItemStatus::SAVED
+                                                                 : ItemStatus::PENDING_SAVE;
+                    result.message = !success
+                                         ? "Encryption failed"
+                                         : !preserve_location
+                                               ? "Ready to save"
+                                               : source_deleted
+                                                     ? pathToUtf8(result.output_path)
+                                                     : "Saved, but the source file could not be deleted";
                 } else {
-                    const std::filesystem::path desired_name = source.path.stem();
-                    result.output_path = uniquePath(destination_folder, desired_name);
-                    result.display_name = pathToUtf8(result.output_path.filename());
+                    result.relative_path = source.relative_path;
+                    result.relative_path.replace_extension("");
+                    const std::filesystem::path destination_parent = preserve_location
+                        ? source.path.parent_path()
+                        : destination_folder / result.relative_path.parent_path();
+                    std::error_code directory_error;
+                    std::filesystem::create_directories(destination_parent, directory_error);
+                    if (directory_error) throw std::filesystem::filesystem_error(
+                        "The destination folder could not be created",
+                        destination_parent, directory_error);
+                    const std::filesystem::path desired_name = preserve_location
+                        ? source.path.stem()
+                        : result.relative_path.filename();
+                    result.output_path = uniquePath(destination_parent, desired_name);
+                    result.relative_path = preserve_location
+                        ? result.output_path.filename()
+                        : std::filesystem::relative(result.output_path, destination_folder);
+                    result.display_name = pathToUtf8(result.relative_path);
                     success = engine.process_file(source.path, password_value, ActionType::DECRYPT,
-                                                  CipherType::AES256, should_delete, result.output_path);
+                                                  CipherType::AES256, false, result.output_path);
+                    bool source_deleted = true;
+                    if (success && should_delete) {
+                        source_deleted = engine.delete_file(source.path);
+                        if (!source_deleted) ++deletion_warning_count;
+                    }
                     result.status = success ? ItemStatus::SAVED : ItemStatus::FAILED;
-                    result.message = success ? pathToUtf8(result.output_path)
-                                             : "Wrong password, corrupted file, or unavailable destination";
+                    result.message = !success
+                                         ? "Wrong password, corrupted file, or unavailable destination"
+                                         : source_deleted
+                                               ? pathToUtf8(result.output_path)
+                                               : "Saved, but the .kasa source could not be deleted";
                 }
             } catch (const std::exception& error) {
                 result.status = ItemStatus::FAILED;
@@ -1235,6 +1328,13 @@ void AppWindow::startProcessing() {
         OPENSSL_cleanse(password_value.data(), password_value.size());
         processing = false;
     });
+
+    // The worker owns the only operation copy. Do not keep the password visible
+    // or reusable in the UI for the rest of the save workflow.
+    OPENSSL_cleanse(password.data(), password.size());
+    OPENSSL_cleanse(password_confirmation.data(), password_confirmation.size());
+    password.fill('\0');
+    password_confirmation.fill('\0');
 }
 
 void AppWindow::joinFinishedWorker() {
@@ -1243,6 +1343,7 @@ void AppWindow::joinFinishedWorker() {
         worker.join();
         cancel_requested = false;
         const std::size_t failures = failed_count.exchange(0);
+        const std::size_t deletion_warnings = deletion_warning_count.exchange(0);
         if (failures > 0) {
             std::ostringstream message;
             if (mode == UiMode::UNLOCK) {
@@ -1250,6 +1351,11 @@ void AppWindow::joinFinishedWorker() {
                         << " could not be unlocked. The password may be incorrect, the file may "
                            "be corrupted, or the destination may be unavailable. No failed output "
                            "was created or added to the Outputs list.";
+                if (deletion_warnings > 0) {
+                    message << "\n\n" << deletion_warnings << " successfully unlocked .kasa file"
+                            << (deletion_warnings == 1 ? " was" : "s were")
+                            << " not deleted; the restored output is safe.";
+                }
                 failure_modal_title = "Unable to unlock files";
 
                 // Keep only failed inputs in the source list so a retry does not decrypt
@@ -1269,19 +1375,63 @@ void AppWindow::joinFinishedWorker() {
             } else {
                 message << failures << " file" << (failures == 1 ? "" : "s")
                         << " could not be protected. No failed output was added.";
+                if (keep_source_location && deletion_warnings > 0) {
+                    message << "\n\n" << deletion_warnings << " protected source file"
+                            << (deletion_warnings == 1 ? " was" : "s were")
+                            << " not deleted; the encrypted output is safe.";
+                }
                 failure_modal_title = "Unable to protect files";
+
+                if (keep_source_location) {
+                    std::vector<std::filesystem::path> successful_sources;
+                    {
+                        std::lock_guard lock(state_mutex);
+                        for (const OutputItem& output : outputs) {
+                            successful_sources.push_back(output.source_path);
+                        }
+                    }
+                    sources.erase(std::remove_if(sources.begin(), sources.end(),
+                        [&](const SourceItem& source) {
+                            return std::find(successful_sources.begin(), successful_sources.end(),
+                                             source.path) != successful_sources.end();
+                        }), sources.end());
+                }
             }
             failure_modal_message = message.str();
             failure_modal_pending = true;
         } else if (!was_cancelled && mode == UiMode::UNLOCK && processed_count.load() > 0) {
             const std::size_t unlocked_count = processed_count.load();
-            const std::string destination = pathToUtf8(unlock_destination);
+            const std::string destination = keep_source_location
+                ? "beside the source files"
+                : pathToUtf8(unlock_destination);
             clearSession();
             success_modal_title = "Files unlocked successfully";
             success_modal_message = std::to_string(unlocked_count) + " file" +
                                     (unlocked_count == 1 ? " was" : "s were") +
                                     " verified and saved to:\n" + destination +
                                     "\n\nThe workspace has been cleared for the next operation.";
+            if (deletion_warnings > 0) {
+                success_modal_message += "\n\n" + std::to_string(deletion_warnings) +
+                                         " .kasa source file" +
+                                         (deletion_warnings == 1 ? " was" : "s were") +
+                                         " not deleted.";
+            }
+            success_modal_pending = true;
+        } else if (!was_cancelled && mode == UiMode::PROTECT && keep_source_location &&
+                   processed_count.load() > 0) {
+            const std::size_t protected_count = processed_count.load();
+            clearSession();
+            success_modal_title = "Files protected successfully";
+            success_modal_message = std::to_string(protected_count) + " file" +
+                                    (protected_count == 1 ? " was" : "s were") +
+                                    " encrypted beside the source files.\n\nThe workspace has "
+                                    "been cleared for the next operation.";
+            if (deletion_warnings > 0) {
+                success_modal_message += "\n\n" + std::to_string(deletion_warnings) +
+                                         " source file" +
+                                         (deletion_warnings == 1 ? " was" : "s were") +
+                                         " not deleted.";
+            }
             success_modal_pending = true;
         }
         if (was_cancelled) notice = "The operation stopped after the current file.";
@@ -1309,7 +1459,7 @@ void AppWindow::saveOutput(std::size_t index) {
         if (index >= outputs.size() || outputs[index].status != ItemStatus::PENDING_SAVE) return;
         item = outputs[index];
     }
-    const auto destination = saveFileDialog(pathFromUtf8(item.display_name));
+    const auto destination = saveFileDialog(item.relative_path.filename());
     if (!destination) return;
 
     const bool moved = moveStagedOutput(item.output_path, *destination);
@@ -1376,8 +1526,10 @@ void AppWindow::saveAllOutputs() {
             std::lock_guard lock(state_mutex);
             item = outputs[index];
         }
-        const std::filesystem::path destination = uniquePath(*folder,
-                                                             pathFromUtf8(item.display_name));
+        const std::filesystem::path destination_parent =
+            *folder / item.relative_path.parent_path();
+        const std::filesystem::path destination = uniquePath(
+            destination_parent, item.relative_path.filename());
         const bool moved = moveStagedOutput(item.output_path, destination);
         bool source_deleted = true;
         if (moved && item.delete_source_after_save) source_deleted = engine.delete_file(item.source_path);

@@ -24,16 +24,16 @@ struct KasaFileInfo {
 
 class encryption_engine {
     public:
-    bool encrypt_xor(std::filesystem::path file_path, std::string key, bool delete_original = false,
+    bool encrypt_xor(std::filesystem::path file_path, const std::string& key, bool delete_original = false,
                      std::filesystem::path destination_path = {});
-    bool dencrypt_xor(std::filesystem::path file_path, std::string key, bool delete_original = false,
+    bool dencrypt_xor(std::filesystem::path file_path, const std::string& key, bool delete_original = false,
                       std::filesystem::path destination_path = {});
-    bool encrypt_aes256(std::filesystem::path file_path, std::string key, bool delete_original = false,
+    bool encrypt_aes256(std::filesystem::path file_path, const std::string& key, bool delete_original = false,
                         std::filesystem::path destination_path = {});
-    bool dencrypt_aes256(std::filesystem::path file_path, std::string key, bool delete_original = false,
+    bool dencrypt_aes256(std::filesystem::path file_path, const std::string& key, bool delete_original = false,
                          std::filesystem::path destination_path = {});
     bool delete_file(std::filesystem::path file_path);
-    bool process_file(std::filesystem::path file_path, std::string key, ActionType action, CipherType cipher,
+    bool process_file(std::filesystem::path file_path, const std::string& key, ActionType action, CipherType cipher,
                       bool delete_original = false, std::filesystem::path destination_path = {});
     [[nodiscard]] std::optional<KasaFileInfo> inspect_file(
         const std::filesystem::path& file_path) const;
