@@ -1,9 +1,9 @@
 #define MyAppName "KASA"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0-test.1"
 #define MyAppPublisher "KASA contributors"
 #define MyAppURL "https://github.com/emecyildiz/Encryption"
 #define MyAppExeName "KASA.exe"
-#define PackageDirectory "..\dist\KASA-1.0.0-windows-x64"
+#define PackageDirectory "..\dist\KASA-1.1.0-test.1-windows-x64"
 
 [Setup]
 AppId={{8AAE51C3-BD6C-495A-A0E6-15B0BF50C4A4}
@@ -34,11 +34,12 @@ CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName}
 RestartApplications=no
 SetupLogging=yes
-VersionInfoVersion=1.0.0.0
+VersionInfoVersion=1.1.0.0
+ChangesAssociations=yes
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=KASA local file protection installer
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion={#MyAppVersion}
+VersionInfoProductVersion=1.1.0.0
 VersionInfoCopyright=Copyright (c) 2026 KASA contributors
 
 [Languages]
@@ -46,6 +47,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "fileassociation"; Description: "Offer KASA read-only preview for .kasa files"; GroupDescription: "File association:"; Flags: unchecked
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\.kasa\OpenWithProgids"; ValueType: string; ValueName: "KASA.EncryptedFile"; ValueData: ""; Flags: uninsdeletevalue; Tasks: fileassociation
+Root: HKCU; Subkey: "Software\Classes\KASA.EncryptedFile"; ValueType: string; ValueData: "KASA encrypted file"; Flags: uninsdeletekey; Tasks: fileassociation
+Root: HKCU; Subkey: "Software\Classes\KASA.EncryptedFile\DefaultIcon"; ValueType: string; ValueData: "{app}\{#MyAppExeName},0"; Tasks: fileassociation
+Root: HKCU; Subkey: "Software\Classes\KASA.EncryptedFile\shell\open\command"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" --preview ""%1"""; Tasks: fileassociation
 
 [Files]
 Source: "{#PackageDirectory}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

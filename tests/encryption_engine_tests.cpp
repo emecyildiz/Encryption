@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <windows.h>
 
 namespace {
     class TestWorkspace {
@@ -231,6 +232,151 @@ namespace {
         return expect(engine.delete_file(source) && !std::filesystem::exists(source),
                       "Source deletion: overwrite and remove a single-link file");
     }
+
+    bool runAesNoUnauthenticatedFileTest(bool tampered) {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / "source.bin";
+        const auto encrypted = workspace.path / "source.kasa";
+        const auto destination = workspace.path / "restored.bin";
+        if (!writeBytes(source, std::vector<std::uint8_t>(128 * 1024, 0x61)) ||
+            !engine.encrypt_aes256(source, "authentication-test", false, encrypted)) return false;
+        if (tampered && !tamperWithCiphertext(encrypted)) return false;
+        const HANDLE changes = FindFirstChangeNotificationW(workspace.path.c_str(), FALSE,
+                                                             FILE_NOTIFY_CHANGE_FILE_NAME);
+        if (changes == INVALID_HANDLE_VALUE) return expect(false, "Create directory watcher");
+        const bool accepted = engine.dencrypt_aes256(encrypted,
+            tampered ? "authentication-test" : "incorrect-password", false, destination);
+        // A create-then-delete would also signal: checking existence alone misses it.
+        const DWORD notification = WaitForSingleObject(changes, 100);
+        FindCloseChangeNotification(changes);
+        return expect(!accepted && notification == WAIT_TIMEOUT &&
+                      !std::filesystem::exists(destination),
+                      tampered ? "AES tamper: no temporary file is ever created"
+                               : "AES wrong password: no temporary file is ever created");
+    }
+
+    bool runAesBusyInputTest() {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / "source.bin";
+        const auto encrypted = workspace.path / "source.kasa";
+        const auto destination = workspace.path / "restored.bin";
+        if (!writeBytes(source, std::vector<std::uint8_t>(8193, 0x51)) ||
+            !engine.encrypt_aes256(source, "busy-test", false, encrypted)) return false;
+        const HANDLE writer = CreateFileW(encrypted.c_str(), GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (writer == INVALID_HANDLE_VALUE) return expect(false, "Open writer fixture");
+        const bool accepted = engine.dencrypt_aes256(encrypted, "busy-test", false, destination);
+        CloseHandle(writer);
+        if (!expect(!accepted && !std::filesystem::exists(destination),
+                    "AES: refuse input with a pre-existing writer")) return false;
+        return expect(engine.dencrypt_aes256(encrypted, "busy-test", false, destination) &&
+                      readBytes(destination) == readBytes(source),
+                      "AES: input works after writer closes");
+    }
+
+    bool runSourceSnapshotTest(CipherType cipher, int scenario) {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / "document.bin";
+        const auto encrypted = workspace.path / "document.kasa";
+        const auto restored = workspace.path / "restored.bin";
+        const std::vector<std::uint8_t> original(8193, 0x62);
+        const std::vector<std::uint8_t> changed(8193, 0x73);
+        std::optional<SourceSnapshot> snapshot;
+        if (!writeBytes(source, original) || !engine.process_file(source, "snapshot-test",
+                ActionType::ENCRYPT, cipher, false, encrypted, &snapshot) || !snapshot) return false;
+        const auto timestamp = std::filesystem::last_write_time(source);
+        HANDLE writer = INVALID_HANDLE_VALUE;
+        if (scenario == 1) {
+            // Same size and restored timestamp: only the content digest detects this.
+            if (!writeBytes(source, changed)) return false;
+            std::filesystem::last_write_time(source, timestamp);
+        } else if (scenario == 2) {
+            // Same bytes/timestamp at the old path, but a different file object.
+            std::filesystem::rename(source, workspace.path / "original-moved.bin");
+            if (!writeBytes(source, original)) return false;
+            std::filesystem::last_write_time(source, timestamp);
+        } else if (scenario == 3) {
+            std::filesystem::create_hard_link(source, workspace.path / "extra-link.bin");
+        } else if (scenario == 4) {
+            writer = CreateFileW(source.c_str(), GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (writer == INVALID_HANDLE_VALUE) return false;
+        }
+        const bool deleted = engine.delete_file(source, *snapshot);
+        if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+        if (scenario == 0) {
+            if (!expect(deleted && !std::filesystem::exists(source), "Verified unchanged source is deleted")) return false;
+        } else {
+            if (!expect(!deleted && readBytes(source) == (scenario == 1 ? changed : original),
+                        "Changed/replaced/linked/busy source remains intact: " + std::to_string(scenario))) return false;
+        }
+        return expect(engine.process_file(encrypted, "snapshot-test", ActionType::DECRYPT,
+                       cipher, false, restored) && readBytes(restored) == original,
+                      "Saved ciphertext still restores the original bytes");
+    }
+
+    bool runAutomaticDeletionTest(CipherType cipher) {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto source = workspace.path / "source.bin";
+        const auto encrypted = workspace.path / "source.kasa";
+        const auto restored = workspace.path / "restored.bin";
+        const std::vector<std::uint8_t> content(2049, 0x34);
+        if (!writeBytes(source, content)) return false;
+        if (!expect(engine.process_file(source, "automatic-test", ActionType::ENCRYPT,
+                    cipher, true, encrypted) && !std::filesystem::exists(source),
+                    "Automatic encryption deletion uses verified source")) return false;
+        return expect(engine.process_file(encrypted, "automatic-test", ActionType::DECRYPT,
+                      cipher, true, restored) && !std::filesystem::exists(encrypted) &&
+                      readBytes(restored) == content, "Automatic decryption deletion uses verified source");
+    }
+}
+
+namespace {
+    bool runInvalidSelectionTest(CipherType valid_cipher) {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto plain = workspace.path / "source.bin";
+        const auto encrypted = workspace.path / "source.kasa";
+        const auto output = workspace.path / "unexpected.bin";
+        const std::vector<std::uint8_t> content(4097, 0x53);
+        if (!writeBytes(plain, content) || !engine.process_file(plain, "selection-test",
+                ActionType::ENCRYPT, valid_cipher, false, encrypted)) return false;
+        const auto ciphertext = readBytes(encrypted);
+        struct Selection { ActionType action; CipherType cipher; };
+        const Selection invalid[] {
+            {ActionType::ENCRYPT, static_cast<CipherType>(-1)},
+            {ActionType::ENCRYPT, static_cast<CipherType>(99)},
+            {ActionType::DECRYPT, static_cast<CipherType>(-1)},
+            {ActionType::DECRYPT, static_cast<CipherType>(99)},
+            {static_cast<ActionType>(-1), valid_cipher},
+            {static_cast<ActionType>(99), valid_cipher}
+        };
+        for (const auto& source : {plain, encrypted}) {
+            for (const auto selection : invalid) {
+                std::optional<SourceSnapshot> snapshot = SourceSnapshot{};
+                const bool accepted = engine.process_file(source, "selection-test",
+                    selection.action, selection.cipher, true, output, &snapshot);
+                if (!expect(!accepted, "Invalid selection rejected") ||
+                    !expect(!snapshot, "Failure clears stale source snapshot") ||
+                    !expect(readBytes(plain) == content && readBytes(encrypted) == ciphertext,
+                            "Invalid selection never changes or deletes either input") ||
+                    !expect(!std::filesystem::exists(output) &&
+                            !std::filesystem::exists(output.string() + ".tmp"),
+                            "Invalid selection produces no output")) return false;
+            }
+        }
+        // Decryption still detects the actual algorithm from the authenticated format.
+        const auto other = valid_cipher == CipherType::AES256 ? CipherType::XOR : CipherType::AES256;
+        return expect(engine.process_file(encrypted, "selection-test", ActionType::DECRYPT,
+                      other, false, output) && readBytes(output) == content,
+                      "Valid decryption retains automatic algorithm detection");
+    }
 }
 
 int main() {
@@ -239,6 +385,8 @@ int main() {
     };
 
     bool passed = true;
+    passed &= runInvalidSelectionTest(CipherType::AES256);
+    passed &= runInvalidSelectionTest(CipherType::XOR);
     passed &= runRoundTrip(CipherType::AES256, "AES binary round-trip", binary_data);
     passed &= runRoundTrip(CipherType::AES256, "AES empty-file round-trip", {});
     passed &= runWrongPasswordTest(CipherType::AES256, "AES wrong password");
@@ -253,6 +401,15 @@ int main() {
     passed &= runTemporaryCollisionTest();
     passed &= runHardLinkDeletionTest();
     passed &= runSingleLinkDeletionTest();
+    passed &= runAesNoUnauthenticatedFileTest(false);
+    passed &= runAesNoUnauthenticatedFileTest(true);
+    passed &= runAesBusyInputTest();
+    passed &= runRoundTrip(CipherType::AES256, "AES multi-buffer round-trip",
+                           std::vector<std::uint8_t>(1024 * 1024 + 17, 0xb3));
+    for (const auto cipher : {CipherType::AES256, CipherType::XOR}) {
+        for (int scenario = 0; scenario < 5; ++scenario) passed &= runSourceSnapshotTest(cipher, scenario);
+        passed &= runAutomaticDeletionTest(cipher);
+    }
 
     if (!passed) return 1;
     std::cout << "All KASA encryption engine tests passed.\n";

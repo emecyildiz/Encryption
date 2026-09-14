@@ -3,6 +3,7 @@
 
 #include <GLFW/glfw3.h>
 #include "encryption_engine.h"
+#include "batch_state.h"
 
 #include <array>
 #include <atomic>
@@ -26,7 +27,7 @@ public:
 
 private:
     enum class UiMode { PROTECT, UNLOCK };
-    enum class ItemStatus { READY, PROCESSING, PENDING_SAVE, SAVED, FAILED };
+    using ItemStatus = kasa::BatchItemStatus;
 
     struct SourceItem {
         std::filesystem::path path;
@@ -49,6 +50,7 @@ private:
         ItemStatus status = ItemStatus::PROCESSING;
         bool staged = false;
         bool delete_source_after_save = false;
+        std::optional<SourceSnapshot> source_snapshot;
     };
 
     GLFWwindow* window = nullptr;
@@ -75,6 +77,8 @@ private:
     std::thread worker;
     std::atomic<bool> processing {false};
     std::atomic<bool> cancel_requested {false};
+    std::atomic<bool> batch_stopped {false};
+    std::atomic<bool> worker_failed {false};
     std::atomic<std::size_t> processed_count {0};
     std::atomic<std::size_t> total_count {0};
     std::atomic<std::size_t> failed_count {0};
@@ -94,7 +98,8 @@ private:
 
     void setupImGui();
     void renderUI();
-    void renderTitleBar();
+    bool select_results = false;
+    void renderSettingsPanel();
     void renderHeader();
     void renderSourcePanel();
     void renderOutputPanel();
@@ -109,6 +114,7 @@ private:
     void addFile(const std::filesystem::path& path,
                  std::filesystem::path relative_path = {});
     void clearSession();
+    void retainResultsAfterSave();
     void startProcessing();
     void joinFinishedWorker();
 

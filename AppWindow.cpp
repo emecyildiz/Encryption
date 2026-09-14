@@ -1,4 +1,11 @@
 #include "AppWindow.h"
+#include "verified_save.h"
+#include "batch_save.h"
+#include "batch_runner.h"
+#include "ui_palette.h"
+#include "output_path.h"
+#include "operation_password.h"
+#include <memory>
 #include "resources/resource.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
@@ -23,13 +30,13 @@
 #include <string_view>
 
 namespace {
-    constexpr ImVec4 COLOR_ACCENT {0.18f, 0.78f, 0.86f, 1.0f};
-    constexpr ImVec4 COLOR_VIOLET {0.55f, 0.38f, 0.96f, 1.0f};
-    constexpr ImVec4 COLOR_PINK {0.94f, 0.35f, 0.68f, 1.0f};
-    constexpr ImVec4 COLOR_SUCCESS {0.25f, 0.78f, 0.52f, 1.0f};
-    constexpr ImVec4 COLOR_WARNING {0.95f, 0.66f, 0.25f, 1.0f};
-    constexpr ImVec4 COLOR_ERROR {0.95f, 0.35f, 0.38f, 1.0f};
-    constexpr ImVec4 COLOR_MUTED {0.56f, 0.62f, 0.70f, 1.0f};
+    constexpr ImVec4 COLOR_ACCENT {0.16f, 0.34f, 0.57f, 1.0f};
+    constexpr ImVec4 COLOR_VIOLET {0.53f, 0.66f, 0.79f, 1.0f};
+    constexpr ImVec4 COLOR_PINK {0.70f, 0.70f, 0.70f, 1.0f};
+    constexpr ImVec4 COLOR_SUCCESS {0.12f, 0.43f, 0.28f, 1.0f};
+    constexpr ImVec4 COLOR_WARNING {0.57f, 0.34f, 0.08f, 1.0f};
+    constexpr ImVec4 COLOR_ERROR {0.72f, 0.18f, 0.22f, 1.0f};
+    constexpr ImVec4 COLOR_MUTED {0.40f, 0.44f, 0.49f, 1.0f};
 
     struct PasswordStrength {
         float value = 0.0f;
@@ -90,6 +97,13 @@ namespace {
         return std::string(ellipsis);
     }
 
+    ImVec4 rgba(kasa::ui::Rgb c) { return ImVec4(c.r,c.g,c.b,1.0f); }
+    void pushPrimaryButtonStyle() {
+        ImGui::PushStyleColor(ImGuiCol_Button, rgba(kasa::ui::primary));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, rgba(kasa::ui::primary_hover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, rgba(kasa::ui::primary_active));
+        ImGui::PushStyleColor(ImGuiCol_Text, rgba(kasa::ui::on_primary));
+    }
     void pushModalStyle() {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 20.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26.0f, 24.0f));
@@ -97,16 +111,17 @@ namespace {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(16.0f, 11.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.0f, 12.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.055f, 0.075f, 0.135f, 0.99f));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.28f, 0.34f, 0.52f, 0.72f));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.18f, 0.30f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.27f, 0.43f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.16f, 0.38f, 0.50f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.015f, 0.025f, 0.060f, 0.78f));
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(1,1,1,1));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.380f, 0.380f, 0.380f, 0.72f));
+        ImGui::PushStyleColor(ImGuiCol_Button, rgba(kasa::ui::secondary));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, rgba(kasa::ui::secondary_hover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, rgba(kasa::ui::secondary_active));
+        ImGui::PushStyleColor(ImGuiCol_Text, rgba(kasa::ui::on_secondary));
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.033f, 0.033f, 0.033f, 0.78f));
     }
 
     void popModalStyle() {
-        ImGui::PopStyleColor(6);
+        ImGui::PopStyleColor(7);
         ImGui::PopStyleVar(6);
     }
 
@@ -122,8 +137,8 @@ namespace {
     void beginModalMessageCard(const char* id) {
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 14.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 15.0f));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.035f, 0.052f, 0.105f, 0.92f));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.30f, 0.46f, 0.62f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.96f,0.97f,0.98f,1));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.333f, 0.333f, 0.333f, 0.62f));
         ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
                           ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY |
                               ImGuiChildFlags_AlwaysUseWindowPadding,
@@ -138,33 +153,9 @@ namespace {
     }
 
     void beginCard(const char* id, ImVec2 size) {
-        const ImVec2 position = ImGui::GetCursorScreenPos();
-        const ImVec2 resolved_size(
-            size.x <= 0 ? ImGui::GetContentRegionAvail().x : size.x,
-            size.y <= 0 ? ImGui::GetContentRegionAvail().y : size.y);
-        ImDrawList* draw = ImGui::GetWindowDrawList();
-        constexpr float card_rounding = 22.0f;
-        draw->AddRectFilled(position + ImVec2(0, 7), position + resolved_size + ImVec2(0, 7),
-                            IM_COL32(2, 5, 14, 82), card_rounding);
-        draw->AddRectFilled(position, position + resolved_size, IM_COL32(17, 24, 43, 248), card_rounding);
-        draw->AddRect(position, position + resolved_size, IM_COL32(69, 82, 119, 82),
-                      card_rounding, 0, 1.0f);
-
-        // The inset accent avoids the hard, full-width edge and keeps the card corners soft.
-        const float accent_start = position.x + 24.0f;
-        const float accent_end = position.x + resolved_size.x - 24.0f;
-        const float accent_middle = accent_start + (accent_end - accent_start) * 0.52f;
-        const float accent_y = position.y + 1.5f;
-        draw->AddLine(ImVec2(accent_start, accent_y), ImVec2(accent_middle, accent_y),
-                      IM_COL32(47, 211, 226, 190), 3.0f);
-        draw->AddLine(ImVec2(accent_middle, accent_y), ImVec2(accent_end, accent_y),
-                      IM_COL32(150, 91, 244, 185), 3.0f);
-        draw->AddCircleFilled(ImVec2(accent_start, accent_y), 1.5f, IM_COL32(47, 211, 226, 190), 12);
-        draw->AddCircleFilled(ImVec2(accent_end, accent_y), 1.5f, IM_COL32(150, 91, 244, 185), 12);
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 20.0f));
-        ImGui::BeginChild(id, resolved_size, ImGuiChildFlags_AlwaysUseWindowPadding,
-                          ImGuiWindowFlags_NoBackground);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1,1,1,1));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22.0f, 20.0f));
+        ImGui::BeginChild(id, size, ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
     }
@@ -320,12 +311,13 @@ bool AppWindow::init() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-    window = glfwCreateWindow(1240, 800, "KASA - Local File Protection", nullptr, nullptr);
+    glfwWindowHint(GLFW_DECORATED, GLFW_TRUE);
+    window = glfwCreateWindow(1200, 820, "KASA - Local File Protection", nullptr, nullptr);
     if (!window) {
         return false;
     }
 
+    glfwSetWindowSizeLimits(window, 1024, 720, GLFW_DONT_CARE, GLFW_DONT_CARE);
     const HWND native_window = glfwGetWin32Window(window);
     const HINSTANCE instance = GetModuleHandleW(nullptr);
     const auto large_icon = reinterpret_cast<HICON>(LoadImageW(
@@ -385,29 +377,64 @@ void AppWindow::setupImGui() {
 
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 0.0f;
-    style.ChildRounding = 16.0f;
-    style.FrameRounding = 11.0f;
-    style.PopupRounding = 12.0f;
+    style.ChildRounding = 8.0f;
+    style.FrameRounding = 5.0f;
+    style.PopupRounding = 8.0f;
     style.ScrollbarRounding = 12.0f;
-    style.FramePadding = ImVec2(14.0f, 10.0f);
-    style.ItemSpacing = ImVec2(11.0f, 11.0f);
+    style.FramePadding = ImVec2(12.0f, 8.0f);
+    style.ItemSpacing = ImVec2(10.0f, 8.0f);
     style.ItemInnerSpacing = ImVec2(8.0f, 7.0f);
     style.WindowPadding = ImVec2(0.0f, 0.0f);
     style.CellPadding = ImVec2(9.0f, 0.0f);
-    style.ScrollbarSize = 7.0f;
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.028f, 0.039f, 0.075f, 1.0f);
-    style.Colors[ImGuiCol_ChildBg] = ImVec4(0.065f, 0.086f, 0.145f, 1.0f);
-    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.095f, 0.122f, 0.190f, 1.0f);
-    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.125f, 0.165f, 0.250f, 1.0f);
-    style.Colors[ImGuiCol_Button] = ImVec4(0.105f, 0.135f, 0.210f, 1.0f);
-    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.48f, 0.62f, 1.0f);
-    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.16f, 0.66f, 0.74f, 1.0f);
+    style.ScrollbarSize = 11.0f;
+    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.047f, 0.047f, 0.047f, 1.0f);
+    style.Colors[ImGuiCol_ChildBg] = ImVec4(0.099f, 0.099f, 0.099f, 1.0f);
+    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.136f, 0.136f, 0.136f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.180f, 0.180f, 0.180f, 1.0f);
+    style.Colors[ImGuiCol_Button] = ImVec4(0.150f, 0.150f, 0.150f, 1.0f);
+    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.433f, 0.433f, 0.433f, 1.0f);
+    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.520f, 0.520f, 0.520f, 1.0f);
     style.Colors[ImGuiCol_CheckMark] = COLOR_ACCENT;
     style.Colors[ImGuiCol_SliderGrab] = COLOR_ACCENT;
-    style.Colors[ImGuiCol_Header] = ImVec4(0.18f, 0.30f, 0.48f, 1.0f);
-    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.26f, 0.43f, 0.64f, 1.0f);
-    style.Colors[ImGuiCol_Border] = ImVec4(0.25f, 0.31f, 0.47f, 0.42f);
+    style.Colors[ImGuiCol_Header] = ImVec4(0.320f, 0.320f, 0.320f, 1.0f);
+    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.443f, 0.443f, 0.443f, 1.0f);
+    style.Colors[ImGuiCol_Border] = ImVec4(0.343f, 0.343f, 0.343f, 0.42f);
 
+    style.Colors[ImGuiCol_Text] = ImVec4(0.91f, 0.90f, 0.88f, 1.0f);
+    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.075f, 0.075f, 0.075f, 1.0f);
+    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.15f, 0.15f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.19f, 0.19f, 0.19f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.22f, 0.22f, 0.22f, 1.0f);
+    style.Colors[ImGuiCol_Button] = ImVec4(0.19f, 0.19f, 0.19f, 1.0f);
+    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.27f, 0.27f, 0.27f, 1.0f);
+    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.23f, 0.23f, 0.23f, 1.0f);
+    style.Colors[ImGuiCol_Border] = ImVec4(0.24f, 0.24f, 0.24f, 1.0f);
+    style.Colors[ImGuiCol_TextSelectedBg] = ImVec4(0.32f, 0.48f, 0.66f, 0.45f);
+
+    style.Colors[ImGuiCol_Text] = ImVec4(0.13f,0.17f,0.22f,1);
+    style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.50f,0.54f,0.58f,1);
+    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.95f,0.96f,0.97f,1);
+    style.Colors[ImGuiCol_ChildBg] = ImVec4(1,1,1,1);
+    style.Colors[ImGuiCol_Border] = ImVec4(0.85f,0.87f,0.90f,1);
+    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.94f,0.95f,0.96f,1);
+    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.88f,0.91f,0.94f,1);
+    style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.85f,0.89f,0.94f,1);
+    style.Colors[ImGuiCol_Button] = ImVec4(0.90f,0.93f,0.96f,1);
+    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.79f,0.85f,0.92f,1);
+    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.70f,0.79f,0.89f,1);
+    style.Colors[ImGuiCol_Header] = ImVec4(0.89f,0.92f,0.95f,1);
+    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.81f,0.87f,0.94f,1);
+    style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.77f,0.83f,0.91f,1);
+    style.Colors[ImGuiCol_Tab] = ImVec4(0.94f,0.95f,0.97f,1);
+    style.Colors[ImGuiCol_TabHovered] = ImVec4(0.84f,0.89f,0.95f,1);
+    style.Colors[ImGuiCol_TabSelected] = ImVec4(0.86f,0.91f,0.97f,1);
+    style.Colors[ImGuiCol_TabSelectedOverline] = COLOR_ACCENT;
+    style.Colors[ImGuiCol_Separator] = ImVec4(0.86f,0.89f,0.92f,1);
+    style.Colors[ImGuiCol_ScrollbarBg] = ImVec4(0.97f,0.98f,0.99f,1);
+    style.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.72f,0.76f,0.80f,1);
+    style.FrameBorderSize = 1.0f;
+    style.FramePadding = ImVec2(12,9);
+    style.TabRounding = 6;
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
     imgui_initialized = true;
@@ -439,131 +466,80 @@ void AppWindow::renderUI() {
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
-    ImGui::Begin("KASA Workspace", nullptr, flags);
-    ImDrawList* background = ImGui::GetWindowDrawList();
-    const ImVec2 window_pos = ImGui::GetWindowPos();
-    const ImVec2 window_size = ImGui::GetWindowSize();
-    background->AddRectFilledMultiColor(window_pos, window_pos + window_size,
-                                        IM_COL32(7, 12, 28, 255), IM_COL32(12, 17, 38, 255),
-                                        IM_COL32(9, 15, 31, 255), IM_COL32(5, 10, 24, 255));
-    background->AddCircleFilled(window_pos + ImVec2(window_size.x * 0.78f, 125.0f), 260.0f,
-                                IM_COL32(98, 57, 210, 18), 64);
-    background->AddCircleFilled(window_pos + ImVec2(100.0f, window_size.y - 80.0f), 220.0f,
-                                IM_COL32(34, 202, 218, 13), 64);
-
-    renderTitleBar();
-    ImGui::SetCursorPos(ImVec2(28.0f, 68.0f));
+    ImGui::Begin("KASA Workspace", nullptr, ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::SetCursorPos(ImVec2(28, 24));
     renderHeader();
-    ImGui::SetCursorPosX(28.0f);
-
-    if (ImGui::BeginTable("WorkspaceColumns", 2,
-                          ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame,
-                          ImVec2(ImGui::GetWindowWidth() - 56.0f,
-                                 ImGui::GetWindowHeight() - ImGui::GetCursorPosY() - 24.0f))) {
+    ImGui::SetCursorPos(ImVec2(20, 112));
+    if (ImGui::BeginTable("WorkspaceColumns", 2, ImGuiTableFlags_SizingStretchProp,
+            ImVec2(io.DisplaySize.x - 40, io.DisplaySize.y - 142))) {
+        ImGui::TableSetupColumn("Workspace", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Settings", ImGuiTableColumnFlags_WidthFixed, 354.0f);
         ImGui::TableNextColumn();
-        renderSourcePanel();
+        beginCard("WorkspaceCard", ImVec2(0, 0));
+        if (ImGui::BeginTabBar("WorkspaceViews")) {
+            if (ImGui::BeginTabItem("Files", nullptr, ImGuiTabItemFlags_None)) {
+                renderSourcePanel();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Results", nullptr,
+                    select_results ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
+                select_results = false;
+                renderOutputPanel();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+        endCard();
         ImGui::TableNextColumn();
-        renderOutputPanel();
+        renderSettingsPanel();
         ImGui::EndTable();
     }
+    ImGui::SetCursorPos(ImVec2(28, io.DisplaySize.y - 23));
+    ImGui::TextColored(COLOR_MUTED, "Processed on this device  /  Folder sync and backup settings still apply");
     renderFailureModal();
     renderSuccessModal();
     renderMixedFolderModal();
     ImGui::End();
 }
 
-void AppWindow::renderTitleBar() {
-    const ImVec2 position = ImGui::GetCursorScreenPos();
-    const float width = ImGui::GetWindowWidth();
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(position, position + ImVec2(width, 50.0f), IM_COL32(8, 13, 29, 245));
-    draw->AddLine(position + ImVec2(0, 49), position + ImVec2(width, 49),
-                  IM_COL32(65, 78, 116, 90));
-    draw->AddCircleFilled(position + ImVec2(27, 25), 14.0f, IM_COL32(42, 202, 218, 255), 28);
-    draw->AddCircleFilled(position + ImVec2(27, 25), 7.0f, IM_COL32(117, 75, 230, 255), 20);
 
-    ImGui::SetCursorScreenPos(position);
-    ImGui::InvisibleButton("##TitleDrag", ImVec2(width - 150.0f, 50.0f));
-    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-        if (glfwGetWindowAttrib(window, GLFW_MAXIMIZED)) glfwRestoreWindow(window);
-        else glfwMaximizeWindow(window);
-    } else if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        // Let Windows own the drag loop. Moving by ImGui's per-frame mouse delta creates
-        // a feedback loop between the cursor and the window and is what caused the jitter.
-        ReleaseCapture();
-        SendMessageW(glfwGetWin32Window(window), WM_NCLBUTTONDOWN, HTCAPTION, 0);
-    }
-
-    ImGui::SetCursorScreenPos(position + ImVec2(50, 14));
-    if (heading_font) ImGui::PushFont(heading_font);
-    ImGui::TextUnformatted("KASA");
-    if (heading_font) ImGui::PopFont();
-    ImGui::SameLine();
-    ImGui::TextColored(COLOR_MUTED, "LOCAL VAULT");
-
-    ImGui::SetCursorScreenPos(position + ImVec2(width - 138.0f, 7.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-    if (ImGui::Button("_", ImVec2(40, 34))) glfwIconifyWindow(window);
-    ImGui::SameLine(0, 4);
-    if (ImGui::Button("[]", ImVec2(40, 34))) {
-        if (glfwGetWindowAttrib(window, GLFW_MAXIMIZED)) glfwRestoreWindow(window);
-        else glfwMaximizeWindow(window);
-    }
-    ImGui::SameLine(0, 4);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.18f, 0.28f, 1.0f));
-    if (ImGui::Button("X", ImVec2(40, 34))) glfwSetWindowShouldClose(window, GLFW_TRUE);
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar();
-    ImGui::SetCursorScreenPos(position + ImVec2(0, 50));
-}
 
 void AppWindow::renderHeader() {
-    const ImVec2 position = ImGui::GetCursorScreenPos();
-    const float width = ImGui::GetWindowWidth() - 56.0f;
-    const ImVec2 size(width, 112.0f);
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(position + ImVec2(0, 6), position + size + ImVec2(0, 6),
-                        IM_COL32(2, 4, 13, 90), 18.0f);
-    draw->AddRectFilled(position, position + size, IM_COL32(22, 32, 62, 252), 18.0f);
-    draw->AddCircleFilled(position + ImVec2(width - 210, 12), 150.0f,
-                          IM_COL32(117, 72, 225, 30), 48);
-    draw->AddCircleFilled(position + ImVec2(width * 0.48f, 145), 165.0f,
-                          IM_COL32(38, 201, 217, 15), 48);
-    draw->AddRect(position, position + size, IM_COL32(99, 111, 166, 100), 18.0f);
-    draw->AddCircleFilled(position + ImVec2(width - 165, -5), 125.0f,
-                          IM_COL32(238, 76, 165, 22), 48);
-
-    ImGui::BeginChild("HeroHeader", size, false, ImGuiWindowFlags_NoBackground);
-    ImGui::SetCursorPos(ImVec2(24, 18));
+    const float top = ImGui::GetCursorPosY();
+    ImGui::BeginGroup();
     if (title_font) ImGui::PushFont(title_font);
-    ImGui::TextUnformatted(mode == UiMode::PROTECT ? "Your files. Your control."
-                                                    : "Bring your files back, safely.");
+    ImGui::TextUnformatted("KASA");
     if (title_font) ImGui::PopFont();
-    ImGui::SetCursorPos(ImVec2(26, 67));
-    ImGui::TextColored(ImVec4(0.72f, 0.78f, 0.89f, 1.0f),
-                       mode == UiMode::PROTECT
-                           ? "Local AES-256-GCM protection. Your files never leave this device."
-                           : "KASA detects the algorithm and verifies integrity automatically.");
-
-    ImGui::SetCursorPos(ImVec2(width - 250.0f, 28.0f));
-    ImGui::TextColored(COLOR_SUCCESS, "●  LOCAL ONLY");
-    ImGui::SetCursorPos(ImVec2(width - 250.0f, 61.0f));
-    ImGui::TextColored(COLOR_MUTED, "The workflow is detected from the file type");
+    ImGui::TextColored(COLOR_MUTED, "Local file encryption");
+    ImGui::EndGroup();
+    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 332, top + 8));
+    ImGui::BeginChild("ModeSwitcher", ImVec2(304, 74), false, ImGuiWindowFlags_NoBackground);
+    const bool locked = processing || !sources.empty();
+    ImGui::BeginDisabled(locked);
+    ImGui::PushStyleColor(ImGuiCol_Button, mode == UiMode::PROTECT ? COLOR_ACCENT : ImVec4(0.9f,0.92f,0.94f,1));
+    ImGui::PushStyleColor(ImGuiCol_Text, mode == UiMode::PROTECT ? ImVec4(1,1,1,1) : ImVec4(0.18f,0.22f,0.28f,1));
+    if (ImGui::Button("Encrypt", ImVec2(140, 40))) setMode(UiMode::PROTECT);
+    ImGui::PopStyleColor(2);
+    ImGui::SameLine(0,8);
+    ImGui::PushStyleColor(ImGuiCol_Button, mode == UiMode::UNLOCK ? COLOR_ACCENT : ImVec4(0.9f,0.92f,0.94f,1));
+    ImGui::PushStyleColor(ImGuiCol_Text, mode == UiMode::UNLOCK ? ImVec4(1,1,1,1) : ImVec4(0.18f,0.22f,0.28f,1));
+    if (ImGui::Button("Decrypt", ImVec2(140,40))) setMode(UiMode::UNLOCK);
+    ImGui::PopStyleColor(2);
+    ImGui::EndDisabled();
+    if (locked) ImGui::TextColored(COLOR_MUTED, "Clear the file list to switch modes.");
     ImGui::EndChild();
-    ImGui::Dummy(ImVec2(0, 15));
 }
 
 void AppWindow::renderSourcePanel() {
-    beginCard("SourcePanel", ImVec2(0, 0));
+
     if (heading_font) ImGui::PushFont(heading_font);
     ImGui::TextUnformatted(mode == UiMode::PROTECT ? "Sources" : "Encrypted files");
     if (heading_font) ImGui::PopFont();
     ImGui::TextColored(COLOR_MUTED, "Choose files or drag them onto this card.");
 
     ImGui::BeginDisabled(processing);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.24f, 0.34f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.89f,0.92f,0.95f,1));
     if (ImGui::Button("+  Files")) chooseFiles();
     ImGui::SameLine();
     if (ImGui::Button("+  Folder")) chooseFolder();
@@ -583,13 +559,22 @@ void AppWindow::renderSourcePanel() {
     }
 
     renderSourceList();
-    ImGui::Dummy(ImVec2(0, 2));
+}
+
+void AppWindow::renderSettingsPanel() {
+    beginCard("SettingsPanel", ImVec2(0, 0));
+    if (heading_font) ImGui::PushFont(heading_font);
+    ImGui::TextUnformatted("Operation");
+    if (heading_font) ImGui::PopFont();
+    ImGui::TextColored(COLOR_MUTED, mode == UiMode::PROTECT ? "Encrypt selected files" : "Restore encrypted files");
+    ImGui::Separator();
 
     // Keep the action button visible. Only the settings area scrolls when the
     // window is short or the advanced section is expanded.
-    const float settings_height = std::max(150.0f, ImGui::GetContentRegionAvail().y - 58.0f);
+    const float settings_height = std::max(150.0f, ImGui::GetContentRegionAvail().y - 90.0f);
     ImGui::BeginChild("SecuritySettings", ImVec2(0, settings_height), ImGuiChildFlags_None);
-    ImGui::TextColored(COLOR_MUTED, "SECURITY SETTINGS");
+    ImGui::BeginDisabled(processing);
+    ImGui::TextColored(COLOR_MUTED, "01  /  PASSWORD");
 
     const ImGuiInputTextFlags password_flags = show_password ? 0 : ImGuiInputTextFlags_Password;
     ImGui::TextUnformatted("Password");
@@ -609,12 +594,19 @@ void AppWindow::renderSourcePanel() {
                          password_confirmation.size(), password_flags);
     }
     ImGui::Checkbox("Show password", &show_password);
-    ImGui::Checkbox("Keep outputs beside their source files", &keep_source_location);
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(COLOR_MUTED, "02  /  OUTPUT LOCATION");
+    ImGui::Checkbox("Use source folder", &keep_source_location);
     if (keep_source_location) {
-        ImGui::TextColored(COLOR_MUTED,
-                           "Folder structure and source locations will be preserved.");
+        ImGui::TextWrapped("A new file is saved next to each source.");
+    } else if (mode == UiMode::PROTECT) {
+        ImGui::TextWrapped("Choose where to save each output from the Results tab.");
     }
 
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(COLOR_MUTED, "03  /  OPTIONS");
     if (mode == UiMode::PROTECT) {
         if (ImGui::TreeNodeEx("Advanced settings", ImGuiTreeNodeFlags_SpanAvailWidth)) {
             show_advanced = true;
@@ -625,37 +617,42 @@ void AppWindow::renderSourcePanel() {
                 cipher = CipherType::XOR;
             }
             if (cipher == CipherType::XOR) {
-                ImGui::TextColored(COLOR_WARNING,
-                                   "XOR is not recommended for real file security.");
+                ImGui::PushStyleColor(ImGuiCol_Text, COLOR_WARNING);
+            ImGui::TextWrapped("XOR is not recommended for real file security.");
+            ImGui::PopStyleColor();
             }
             ImGui::TreePop();
         }
-        ImGui::Checkbox("Delete the source after the output is saved", &delete_original);
+        ImGui::Checkbox("Delete source after saving", &delete_original);
         if (delete_original) {
-            ImGui::TextColored(COLOR_WARNING,
-                               "The source is deleted only after the encrypted output is saved successfully.");
-            ImGui::TextColored(COLOR_WARNING,
-                               "Best-effort overwrite is not guaranteed secure erasure on SSDs.");
+            ImGui::PushStyleColor(ImGuiCol_Text, COLOR_WARNING);
+            ImGui::TextWrapped("The source is deleted only after the encrypted output is saved successfully.");
+            ImGui::PopStyleColor();
+            ImGui::TextWrapped("Sources that changed after encryption, were replaced, or are busy will be kept.");
+            ImGui::PushStyleColor(ImGuiCol_Text, COLOR_WARNING);
+            ImGui::TextWrapped("Best-effort overwrite is not guaranteed secure erasure on SSDs.");
+            ImGui::PopStyleColor();
         }
     } else if (!keep_source_location) {
         ImGui::TextUnformatted("Decrypted file destination");
         const std::string destination = unlock_destination.empty()
             ? "No folder selected"
             : pathToUtf8(unlock_destination);
-        ImGui::TextColored(unlock_destination.empty() ? COLOR_WARNING : COLOR_MUTED,
-                           "%s", destination.c_str());
+        ImGui::TextWrapped("%s", destination.c_str());
         ImGui::BeginDisabled(processing);
         if (ImGui::Button("Choose Destination")) chooseUnlockDestination();
         ImGui::EndDisabled();
     }
     if (mode == UiMode::UNLOCK) {
-        ImGui::Checkbox("Delete the .kasa file after successful decryption", &delete_original);
+        ImGui::Checkbox("Delete encrypted source after saving", &delete_original);
         if (delete_original) {
-            ImGui::TextColored(COLOR_WARNING,
-                               "Best-effort overwrite is not guaranteed secure erasure on SSDs.");
+            ImGui::PushStyleColor(ImGuiCol_Text, COLOR_WARNING);
+            ImGui::TextWrapped("Best-effort overwrite is not guaranteed secure erasure on SSDs.");
+            ImGui::PopStyleColor();
         }
     }
 
+    ImGui::EndDisabled();
     if (!notice.empty()) {
         ImGui::TextWrapped("%s", notice.c_str());
     }
@@ -663,17 +660,25 @@ void AppWindow::renderSourcePanel() {
 
     const bool passwords_match = mode == UiMode::UNLOCK ||
                                  std::strcmp(password.data(), password_confirmation.data()) == 0;
-    const bool can_start = !processing && !sources.empty() && password[0] != '\0' && passwords_match &&
+    bool pending_outputs = false;
+    {
+        std::lock_guard lock(state_mutex);
+        pending_outputs = kasa::has_pending_outputs(outputs);
+    }
+    const bool can_start = !processing && !pending_outputs && !sources.empty() && password[0] != '\0' && passwords_match &&
                            (mode == UiMode::PROTECT || keep_source_location ||
                             !unlock_destination.empty());
     if (!passwords_match) {
         ImGui::TextColored(COLOR_ERROR, "Passwords do not match.");
     }
+    if (!processing && pending_outputs) {
+        ImGui::TextWrapped("Save pending outputs in Results before starting another operation.");
+    }
     if (processing) {
         const bool cancellation_pending = cancel_requested.load();
         ImGui::BeginDisabled(cancellation_pending);
         ImGui::PushStyleColor(ImGuiCol_Button, COLOR_WARNING);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.10f, 0.07f, 0.02f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.063f, 0.063f, 0.063f, 1.0f));
         if (ImGui::Button(cancellation_pending ? "CANCELLATION REQUESTED..."
                                                : "CANCEL AFTER CURRENT FILE",
                           ImVec2(-1, 46))) {
@@ -684,11 +689,12 @@ void AppWindow::renderSourcePanel() {
     } else {
         ImGui::BeginDisabled(!can_start);
         ImGui::PushStyleColor(ImGuiCol_Button, COLOR_ACCENT);
-        if (ImGui::Button(mode == UiMode::PROTECT ? "PROTECT FILES" : "UNLOCK FILES",
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,1,1,1));
+        if (ImGui::Button(mode == UiMode::PROTECT ? "Encrypt files" : "Decrypt files",
                           ImVec2(-1, 46))) {
             startProcessing();
         }
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(2);
         ImGui::EndDisabled();
     }
     endCard();
@@ -697,13 +703,13 @@ void AppWindow::renderSourcePanel() {
 void AppWindow::renderSourceList() {
     const ImVec2 area_position = ImGui::GetCursorScreenPos();
     const float available_height = ImGui::GetContentRegionAvail().y;
-    const float list_height = std::clamp(available_height - 330.0f, 140.0f, 205.0f);
+    const float list_height = std::max(120.0f, available_height - 6.0f);
     const ImVec2 area_size(ImGui::GetContentRegionAvail().x, list_height);
     ImDrawList* parent_draw = ImGui::GetWindowDrawList();
     parent_draw->AddRectFilled(area_position, area_position + area_size,
-                               IM_COL32(10, 17, 34, 210), 14.0f);
+                               IM_COL32(247, 247, 247, 210), 14.0f);
     parent_draw->AddRect(area_position, area_position + area_size,
-                         IM_COL32(69, 86, 127, 120), 14.0f);
+                         IM_COL32(220, 220, 220, 120), 14.0f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("SourceList", area_size, false, ImGuiWindowFlags_NoBackground);
     ImGui::PopStyleColor();
@@ -711,15 +717,7 @@ void AppWindow::renderSourceList() {
     // prevents scrolled rows from painting over the controls outside the list.
     ImDrawList* draw = ImGui::GetWindowDrawList();
     if (sources.empty()) {
-        drawDashedRect(draw, area_position + ImVec2(10, 10), area_position + area_size - ImVec2(10, 10),
-                       IM_COL32(58, 197, 215, 135));
-        draw->AddCircleFilled(area_position + ImVec2(area_size.x * 0.5f, 68.0f), 25.0f,
-                              IM_COL32(42, 202, 218, 36), 32);
-        draw->AddCircle(area_position + ImVec2(area_size.x * 0.5f, 68.0f), 25.0f,
-                        IM_COL32(62, 220, 232, 180), 32, 1.5f);
-        draw->AddText(area_position + ImVec2(area_size.x * 0.5f - 5.0f, 56.0f),
-                      IM_COL32(110, 231, 239, 255), "+");
-        ImGui::SetCursorPosY(105.0f);
+        ImGui::SetCursorPosY(std::max(18.0f, area_size.y * 0.5f - 24.0f));
         const char* primary = mode == UiMode::PROTECT ? "Drop files to protect here"
                                                       : "Drop .kasa files here";
         const float primary_width = ImGui::CalcTextSize(primary).x;
@@ -744,12 +742,14 @@ void AppWindow::renderSourceList() {
                 draw->AddRectFilled(
                     row_start,
                     row_start + ImVec2(ImGui::GetContentRegionAvail().x, item_step - 6.0f),
-                    IM_COL32(23, 33, 57, 235), 10.0f);
+                    IM_COL32(247, 247, 247, 235), 10.0f);
                 ImGui::Dummy(ImVec2(8, 3));
                 ImGui::SameLine();
                 ImGui::BeginGroup();
                 const std::string name = pathToUtf8(sources[index].path.filename());
-                ImGui::TextUnformatted(name.c_str());
+                const auto fitted = fitTextToWidth(name, ImGui::GetContentRegionAvail().x - 155);
+                ImGui::TextUnformatted(fitted.c_str());
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", name.c_str());
                 ImGui::SameLine();
                 ImGui::TextColored(COLOR_MUTED, "%s", formatSize(sources[index].size).c_str());
                 if (sources[index].kasa_info) {
@@ -761,8 +761,10 @@ void AppWindow::renderSourceList() {
                                        "%s  |  Format v%u  |  Authenticated on unlock",
                                        cipher_name, static_cast<unsigned int>(info.format_version));
                 }
-                ImGui::TextColored(COLOR_MUTED, "%s",
-                                   pathToUtf8(sources[index].path.parent_path()).c_str());
+                const auto full_path = pathToUtf8(sources[index].path.parent_path());
+                const auto short_path = fitTextToWidth(full_path, ImGui::GetContentRegionAvail().x - 48);
+                ImGui::TextColored(COLOR_MUTED, "%s", short_path.c_str());
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", full_path.c_str());
                 ImGui::EndGroup();
                 if (!processing) {
                     ImGui::SameLine(ImGui::GetContentRegionMax().x - 30.0f);
@@ -789,16 +791,18 @@ void AppWindow::renderSourceList() {
 }
 
 void AppWindow::renderOutputPanel() {
-    beginCard("OutputPanel", ImVec2(0, 0));
+
     if (heading_font) ImGui::PushFont(heading_font);
-    ImGui::TextUnformatted("Outputs");
+    ImGui::TextUnformatted("Results");
     if (heading_font) ImGui::PopFont();
-    ImGui::TextColored(COLOR_MUTED,
+    ImGui::PushStyleColor(ImGuiCol_Text, COLOR_MUTED);
+    ImGui::TextWrapped(
                        keep_source_location
                            ? "Outputs keep the same folder locations as their sources."
                            : mode == UiMode::PROTECT
                                  ? "Save prepared encrypted files wherever you choose."
                                  : "Verified files are written to your selected folder.");
+    ImGui::PopStyleColor();
 
     if (processing) {
         const std::size_t total = total_count.load();
@@ -815,15 +819,14 @@ void AppWindow::renderOutputPanel() {
                 return item.status == ItemStatus::PENDING_SAVE;
             });
         }
-        ImGui::BeginDisabled(!has_pending_output);
-        ImGui::PushStyleColor(ImGuiCol_Button, COLOR_VIOLET);
-        if (ImGui::Button("Save All...")) saveAllOutputs();
-        ImGui::PopStyleColor();
-        ImGui::EndDisabled();
+        if (has_pending_output) {
+            pushPrimaryButtonStyle();
+            if (ImGui::Button("Save All...")) saveAllOutputs();
+            ImGui::PopStyleColor(4);
+        }
     }
 
     renderOutputList();
-    endCard();
 }
 
 void AppWindow::renderOutputList() {
@@ -837,9 +840,9 @@ void AppWindow::renderOutputList() {
     const ImVec2 list_size(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y);
     ImDrawList* parent_draw = ImGui::GetWindowDrawList();
     parent_draw->AddRectFilled(list_position, list_position + list_size,
-                               IM_COL32(9, 15, 31, 205), 14.0f);
+                               IM_COL32(247, 247, 247, 205), 14.0f);
     parent_draw->AddRect(list_position, list_position + list_size,
-                         IM_COL32(69, 86, 127, 110), 14.0f);
+                         IM_COL32(220, 220, 220, 110), 14.0f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("OutputList", list_size, false, ImGuiWindowFlags_NoBackground);
     ImGui::PopStyleColor();
@@ -847,16 +850,12 @@ void AppWindow::renderOutputList() {
     // list boundary instead of painting over the panel heading and controls.
     ImDrawList* draw = ImGui::GetWindowDrawList();
     if (snapshot.empty()) {
-        const ImVec2 center = list_position + ImVec2(list_size.x * 0.5f, list_size.y * 0.42f);
-        draw->AddCircleFilled(center, 46.0f, IM_COL32(112, 73, 226, 25), 48);
-        draw->AddCircle(center, 46.0f, IM_COL32(119, 89, 230, 120), 48, 1.2f);
-        draw->AddCircle(center, 23.0f, IM_COL32(49, 209, 224, 120), 32, 1.5f);
-        ImGui::SetCursorPosY(list_size.y * 0.42f + 67.0f);
-        const char* primary = mode == UiMode::PROTECT ? "Your encrypted files will appear here"
+        ImGui::SetCursorPosY(std::max(24.0f, list_size.y * 0.36f));
+        const char* primary = mode == UiMode::PROTECT ? "No files processed yet"
                                                       : "Decryption results will appear here";
         ImGui::SetCursorPosX((list_size.x - ImGui::CalcTextSize(primary).x) * 0.5f);
         ImGui::TextUnformatted(primary);
-        const char* secondary = "See status, location, and verification details at a glance.";
+        const char* secondary = "Status and saved locations appear after processing.";
         ImGui::SetCursorPosX((list_size.x - ImGui::CalcTextSize(secondary).x) * 0.5f);
         ImGui::TextColored(COLOR_MUTED, "%s", secondary);
     }
@@ -872,9 +871,9 @@ void AppWindow::renderOutputList() {
             const ImVec2 row_start = ImGui::GetCursorScreenPos();
             const float row_width = ImGui::GetContentRegionAvail().x;
             draw->AddRectFilled(row_start, row_start + ImVec2(row_width, item_step - 8.0f),
-                                IM_COL32(24, 34, 59, 240), 12.0f);
+                                IM_COL32(247, 247, 247, 240), 12.0f);
             draw->AddRect(row_start, row_start + ImVec2(row_width, item_step - 8.0f),
-                          IM_COL32(55, 204, 217, 65), 12.0f);
+                          IM_COL32(220, 220, 220, 65), 12.0f);
 
             const float action_width = item.status == ItemStatus::PENDING_SAVE ? 120.0f : 155.0f;
             const float text_width = std::max(90.0f, row_width - action_width - 52.0f);
@@ -884,10 +883,10 @@ void AppWindow::renderOutputList() {
             ImGui::Dummy(ImVec2(10, 7));
             ImGui::SameLine();
             ImGui::BeginGroup();
-            const ImVec4 status_color = item.status == ItemStatus::PENDING_SAVE
-                                            ? COLOR_WARNING
-                                            : COLOR_SUCCESS;
-            ImGui::TextColored(status_color, "✓");
+            const ImVec4 status_color = item.status == ItemStatus::FAILED ? COLOR_ERROR
+                : item.status == ItemStatus::PENDING_SAVE ? COLOR_WARNING : COLOR_SUCCESS;
+            ImGui::TextColored(status_color, "%s", item.status == ItemStatus::FAILED ? "!" :
+                item.status == ItemStatus::PENDING_SAVE ? "..." : "✓");
             ImGui::SameLine();
             ImGui::TextUnformatted(fitted_name.c_str());
             if (ImGui::IsItemHovered() && fitted_name != item.display_name) {
@@ -948,10 +947,17 @@ void AppWindow::renderFailureModal() {
         ImGui::PopStyleColor();
         ImGui::EndChild();
         ImGui::Dummy(ImVec2(0.0f, 4.0f));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.56f, 0.20f, 0.28f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.25f, 0.34f, 1.0f));
-        if (ImGui::Button("Got it", ImVec2(-1.0f, 44.0f))) ImGui::CloseCurrentPopup();
-        ImGui::PopStyleColor(2);
+        pushPrimaryButtonStyle();
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        const bool acknowledge_failure = ImGui::Button("Got it", ImVec2(-1.0f, 44.0f));
+        ImGui::SetItemDefaultFocus();
+        // Mouse-opened dialogs may not have active keyboard navigation yet.
+        // Scope Enter to this focused modal; ignore its opening frame and repeats.
+        if (acknowledge_failure || (!ImGui::IsWindowAppearing() &&
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+            (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+             ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))) ImGui::CloseCurrentPopup();
+        ImGui::PopStyleColor(4);
         ImGui::EndPopup();
     }
     popModalStyle();
@@ -982,11 +988,15 @@ void AppWindow::renderSuccessModal() {
         ImGui::PopStyleColor();
         ImGui::EndChild();
         ImGui::Dummy(ImVec2(0.0f, 4.0f));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.54f, 0.40f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.66f, 0.48f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 1.0f, 0.98f, 1.0f));
-        if (ImGui::Button("Continue", ImVec2(-1.0f, 44.0f))) ImGui::CloseCurrentPopup();
-        ImGui::PopStyleColor(3);
+        pushPrimaryButtonStyle();
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        const bool acknowledge_success = ImGui::Button("Continue", ImVec2(-1.0f, 44.0f));
+        ImGui::SetItemDefaultFocus();
+        if (acknowledge_success || (!ImGui::IsWindowAppearing() &&
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+            (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+             ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))) ImGui::CloseCurrentPopup();
+        ImGui::PopStyleColor(4);
         ImGui::EndPopup();
     }
     popModalStyle();
@@ -1021,8 +1031,7 @@ void AppWindow::renderMixedFolderModal() {
 
         const std::string protect_label = "Protect regular files (" +
                                            std::to_string(pending_regular_files.size()) + ")";
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.51f, 0.62f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.64f, 0.74f, 1.0f));
+        pushPrimaryButtonStyle();
         if (ImGui::Button(protect_label.c_str(), ImVec2(-1.0f, 46.0f))) {
             const std::vector<PendingPath> selected = pending_regular_files;
             pending_regular_files.clear();
@@ -1033,13 +1042,14 @@ void AppWindow::renderMixedFolderModal() {
             }
             ImGui::CloseCurrentPopup();
         }
-        ImGui::PopStyleColor(2);
-        ImGui::TextColored(COLOR_MUTED, "Encrypt regular files and leave existing .kasa files unchanged.");
+        ImGui::PopStyleColor(4);
+        ImGui::PushStyleColor(ImGuiCol_Text, COLOR_MUTED);
+        ImGui::TextWrapped("Encrypt regular files and leave existing .kasa files unchanged.");
+        ImGui::PopStyleColor();
 
         const std::string unlock_label = "Unlock .kasa files (" +
                                           std::to_string(pending_kasa_files.size()) + ")";
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.39f, 0.27f, 0.70f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.35f, 0.84f, 1.0f));
+        pushPrimaryButtonStyle();
         if (ImGui::Button(unlock_label.c_str(), ImVec2(-1.0f, 46.0f))) {
             const std::vector<PendingPath> selected = pending_kasa_files;
             pending_regular_files.clear();
@@ -1050,8 +1060,10 @@ void AppWindow::renderMixedFolderModal() {
             }
             ImGui::CloseCurrentPopup();
         }
-        ImGui::PopStyleColor(2);
-        ImGui::TextColored(COLOR_MUTED, "Decrypt authenticated .kasa files and leave regular files unchanged.");
+        ImGui::PopStyleColor(4);
+        ImGui::PushStyleColor(ImGuiCol_Text, COLOR_MUTED);
+        ImGui::TextWrapped("Decrypt authenticated .kasa files and leave regular files unchanged.");
+        ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0.0f, 2.0f));
         if (ImGui::Button("Cancel", ImVec2(-1.0f, 40.0f))) {
             pending_regular_files.clear();
@@ -1196,12 +1208,29 @@ void AppWindow::clearSession() {
     std::filesystem::create_directories(staging_directory, cleanup_error);
 }
 
+void AppWindow::retainResultsAfterSave() {
+    // Keep the last operation visible. Only completed inputs leave the retry list;
+    // failed and pending entries must survive a partial Save All operation.
+    std::lock_guard lock(state_mutex);
+    kasa::remove_saved_sources(sources, outputs);
+    select_results = true;
+}
+
 void AppWindow::startProcessing() {
     if (processing) return;
     if (worker.joinable()) worker.join();
-
+    {
+        std::lock_guard lock(state_mutex);
+        if (kasa::has_pending_outputs(outputs)) {
+            notice = "Save pending outputs in Results before starting another operation.";
+            select_results = true;
+            return;
+        }
+    }
+    if (sources.empty() || password[0] == '\0') return;
+    try {
     std::vector<SourceItem> work_items = sources;
-    std::string password_value(password.data());
+    auto password_owner = std::make_unique<OperationPassword>(password.data());
     const UiMode selected_mode = mode;
     const CipherType selected_cipher = cipher;
     const bool should_delete = delete_original;
@@ -1218,15 +1247,20 @@ void AppWindow::startProcessing() {
     failed_count = 0;
     deletion_warning_count = 0;
     cancel_requested = false;
+    batch_stopped = false;
+    worker_failed = false;
+    select_results = true;
     processing = true;
     notice.clear();
 
     worker = std::thread([this, work_items = std::move(work_items),
-                          password_value = std::move(password_value), selected_mode,
+                          password_owner = std::move(password_owner), selected_mode,
                           selected_cipher, should_delete, preserve_location,
                           destination_folder]() mutable {
-        for (const SourceItem& source : work_items) {
-            if (cancel_requested) break;
+        try {
+        const auto run = kasa::run_file_batch(work_items,
+            [this] { return cancel_requested.load(); },
+            [&](const SourceItem& source) {
             {
                 std::lock_guard lock(state_mutex);
                 current_file = pathToUtf8(source.path.filename());
@@ -1257,11 +1291,12 @@ void AppWindow::startProcessing() {
                         result.relative_path = result.output_path.filename();
                     }
                     result.display_name = pathToUtf8(result.relative_path);
-                    success = engine.process_file(source.path, password_value, ActionType::ENCRYPT,
-                                                  selected_cipher, false, result.output_path);
+                    success = engine.process_file(source.path, password_owner->value(), ActionType::ENCRYPT,
+                                                  selected_cipher, false, result.output_path,
+                                                  should_delete ? &result.source_snapshot : nullptr);
                     bool source_deleted = true;
                     if (success && preserve_location && should_delete) {
-                        source_deleted = engine.delete_file(source.path);
+                        source_deleted = result.source_snapshot && engine.delete_file(source.path, *result.source_snapshot);
                         if (!source_deleted) ++deletion_warning_count;
                     }
                     result.staged = success && !preserve_location;
@@ -1294,11 +1329,12 @@ void AppWindow::startProcessing() {
                         ? result.output_path.filename()
                         : std::filesystem::relative(result.output_path, destination_folder);
                     result.display_name = pathToUtf8(result.relative_path);
-                    success = engine.process_file(source.path, password_value, ActionType::DECRYPT,
-                                                  CipherType::AES256, false, result.output_path);
+                    success = engine.process_file(source.path, password_owner->value(), ActionType::DECRYPT,
+                                                  CipherType::AES256, false, result.output_path,
+                                                  should_delete ? &result.source_snapshot : nullptr);
                     bool source_deleted = true;
                     if (success && should_delete) {
-                        source_deleted = engine.delete_file(source.path);
+                        source_deleted = result.source_snapshot && engine.delete_file(source.path, *result.source_snapshot);
                         if (!source_deleted) ++deletion_warning_count;
                     }
                     result.status = success ? ItemStatus::SAVED : ItemStatus::FAILED;
@@ -1309,23 +1345,33 @@ void AppWindow::startProcessing() {
                                                : "Saved, but the .kasa source could not be deleted";
                 }
             } catch (const std::exception& error) {
+                success = false;
                 result.status = ItemStatus::FAILED;
                 result.message = error.what();
+            } catch (...) {
+                success = false;
+                result.status = ItemStatus::FAILED;
+                result.message = "An unexpected error occurred while processing this file.";
             }
 
-            if (success) {
+            if (!success) ++failed_count;
+            if (result.display_name.empty()) result.display_name = pathToUtf8(source.path.filename());
+            {
                 std::lock_guard lock(state_mutex);
                 outputs.push_back(std::move(result));
-            } else {
-                ++failed_count;
             }
             ++processed_count;
+        });
+        batch_stopped = run.stopped_before_next;
+        } catch (...) {
+            // Never let an exception escape a std::thread and terminate the app.
+            worker_failed = true;
         }
         {
             std::lock_guard lock(state_mutex);
             current_file.clear();
         }
-        OPENSSL_cleanse(password_value.data(), password_value.size());
+        password_owner.reset();
         processing = false;
     });
 
@@ -1335,22 +1381,39 @@ void AppWindow::startProcessing() {
     OPENSSL_cleanse(password_confirmation.data(), password_confirmation.size());
     password.fill('\0');
     password_confirmation.fill('\0');
+    } catch (...) {
+        processing = false;
+        select_results = false;
+        total_count = 0;
+        OPENSSL_cleanse(password.data(), password.size());
+        OPENSSL_cleanse(password_confirmation.data(), password_confirmation.size());
+        notice = "The operation could not start. Enter the password and try again.";
+    }
 }
 
 void AppWindow::joinFinishedWorker() {
     if (!processing && worker.joinable()) {
-        const bool was_cancelled = cancel_requested.load();
         worker.join();
+        const bool was_cancelled = batch_stopped.exchange(false);
+        const bool aborted = worker_failed.exchange(false);
+        // Also apply on cancellation: completed files must not run again on retry.
+        retainResultsAfterSave();
         cancel_requested = false;
         const std::size_t failures = failed_count.exchange(0);
         const std::size_t deletion_warnings = deletion_warning_count.exchange(0);
-        if (failures > 0) {
+        if (aborted) {
+            failure_modal_title = "Operation interrupted";
+            failure_modal_message = "An unexpected worker error stopped the batch. Recorded results remain in Results. "
+                "Unfinished inputs remain in Files; inspect the destination before retrying. "
+                "Save any pending outputs first.";
+            failure_modal_pending = true;
+        } else if (failures > 0) {
             std::ostringstream message;
             if (mode == UiMode::UNLOCK) {
                 message << failures << " file" << (failures == 1 ? "" : "s")
                         << " could not be unlocked. The password may be incorrect, the file may "
                            "be corrupted, or the destination may be unavailable. No failed output "
-                           "was created or added to the Outputs list.";
+                           "was accepted. File-specific errors appear in Results.";
                 if (deletion_warnings > 0) {
                     message << "\n\n" << deletion_warnings << " successfully unlocked .kasa file"
                             << (deletion_warnings == 1 ? " was" : "s were")
@@ -1364,7 +1427,7 @@ void AppWindow::joinFinishedWorker() {
                 {
                     std::lock_guard lock(state_mutex);
                     for (const OutputItem& output : outputs) {
-                        successful_sources.push_back(output.source_path);
+                        if (output.status == ItemStatus::SAVED) successful_sources.push_back(output.source_path);
                     }
                 }
                 sources.erase(std::remove_if(sources.begin(), sources.end(),
@@ -1374,7 +1437,7 @@ void AppWindow::joinFinishedWorker() {
                     }), sources.end());
             } else {
                 message << failures << " file" << (failures == 1 ? "" : "s")
-                        << " could not be protected. No failed output was added.";
+                        << " could not be protected. File-specific errors appear in Results.";
                 if (keep_source_location && deletion_warnings > 0) {
                     message << "\n\n" << deletion_warnings << " protected source file"
                             << (deletion_warnings == 1 ? " was" : "s were")
@@ -1387,7 +1450,7 @@ void AppWindow::joinFinishedWorker() {
                     {
                         std::lock_guard lock(state_mutex);
                         for (const OutputItem& output : outputs) {
-                            successful_sources.push_back(output.source_path);
+                            if (output.status == ItemStatus::SAVED) successful_sources.push_back(output.source_path);
                         }
                     }
                     sources.erase(std::remove_if(sources.begin(), sources.end(),
@@ -1404,12 +1467,12 @@ void AppWindow::joinFinishedWorker() {
             const std::string destination = keep_source_location
                 ? "beside the source files"
                 : pathToUtf8(unlock_destination);
-            clearSession();
+            retainResultsAfterSave();
             success_modal_title = "Files unlocked successfully";
             success_modal_message = std::to_string(unlocked_count) + " file" +
                                     (unlocked_count == 1 ? " was" : "s were") +
                                     " verified and saved to:\n" + destination +
-                                    "\n\nThe workspace has been cleared for the next operation.";
+                                    "\n\nSaved locations remain available in Results.";
             if (deletion_warnings > 0) {
                 success_modal_message += "\n\n" + std::to_string(deletion_warnings) +
                                          " .kasa source file" +
@@ -1420,12 +1483,12 @@ void AppWindow::joinFinishedWorker() {
         } else if (!was_cancelled && mode == UiMode::PROTECT && keep_source_location &&
                    processed_count.load() > 0) {
             const std::size_t protected_count = processed_count.load();
-            clearSession();
+            retainResultsAfterSave();
             success_modal_title = "Files protected successfully";
             success_modal_message = std::to_string(protected_count) + " file" +
                                     (protected_count == 1 ? " was" : "s were") +
-                                    " encrypted beside the source files.\n\nThe workspace has "
-                                    "been cleared for the next operation.";
+                                    " encrypted beside the source files.\n\nSaved locations "
+                                    "remain available in Results.";
             if (deletion_warnings > 0) {
                 success_modal_message += "\n\n" + std::to_string(deletion_warnings) +
                                          " source file" +
@@ -1434,7 +1497,11 @@ void AppWindow::joinFinishedWorker() {
             }
             success_modal_pending = true;
         }
-        if (was_cancelled) notice = "The operation stopped after the current file.";
+        if (was_cancelled) {
+            notice = "Stopped before the next file. " + std::to_string(processed_count.load()) +
+                " of " + std::to_string(total_count.load()) +
+                " files attempted. Unfinished inputs remain in Files; save any pending outputs first.";
+        }
     }
 }
 
@@ -1453,6 +1520,7 @@ void AppWindow::chooseUnlockDestination() {
 }
 
 void AppWindow::saveOutput(std::size_t index) {
+    if(processing)return;
     OutputItem item;
     {
         std::lock_guard lock(state_mutex);
@@ -1462,23 +1530,20 @@ void AppWindow::saveOutput(std::size_t index) {
     const auto destination = saveFileDialog(item.relative_path.filename());
     if (!destination) return;
 
-    const bool moved = moveStagedOutput(item.output_path, *destination);
-    bool source_deleted = true;
-    if (moved && item.delete_source_after_save) {
-        source_deleted = engine.delete_file(item.source_path);
-    }
+    kasa::SaveOutcome outcome=kasa::SaveOutcome::Failed;
+    try {
+        outcome=kasa::save_prepared(item,destination,
+            [this](const auto& source,const auto& target){return moveStagedOutput(source,target);},
+            [this](const auto& output){return output.source_snapshot&&engine.delete_file(output.source_path,*output.source_snapshot);});
+    }catch(...){item.message=kasa::save_failure_message;}
+    const bool moved=outcome==kasa::SaveOutcome::Saved||outcome==kasa::SaveOutcome::SavedWithWarning;
     bool all_saved = false;
     std::size_t saved_count = 0;
     std::size_t delete_warning_count = 0;
     {
         std::lock_guard lock(state_mutex);
         // A failed move remains pending so the user can choose another destination.
-        outputs[index].status = moved ? ItemStatus::SAVED : ItemStatus::PENDING_SAVE;
-        outputs[index].output_path = moved ? *destination : item.output_path;
-        outputs[index].staged = !moved;
-        outputs[index].message = !moved ? "Save failed. Choose another destination and try again."
-                                : source_deleted ? pathToUtf8(*destination)
-                                                 : "Saved, but the source file could not be deleted";
+        outputs[index]=std::move(item);
         all_saved = !outputs.empty() && std::all_of(outputs.begin(), outputs.end(),
             [](const OutputItem& output) { return output.status == ItemStatus::SAVED; });
         saved_count = outputs.size();
@@ -1488,17 +1553,18 @@ void AppWindow::saveOutput(std::size_t index) {
             }));
     }
 
+    if (moved) retainResultsAfterSave();
     if (!moved) {
         failure_modal_title = "Unable to save the file";
         failure_modal_message = "The encrypted output could not be saved. Choose another "
                                 "destination and try again. The staged output is still available.";
         failure_modal_pending = true;
     } else if (all_saved) {
-        clearSession();
+        retainResultsAfterSave();
         success_modal_title = "Files saved successfully";
         success_modal_message = std::to_string(saved_count) + " encrypted file" +
                                 (saved_count == 1 ? " was" : "s were") +
-                                " saved. The workspace has been cleared for the next operation.";
+                                " saved. Saved locations remain available in Results.";
         if (delete_warning_count > 0) {
             success_modal_message += "\n\n" + std::to_string(delete_warning_count) +
                                      " source file" + (delete_warning_count == 1 ? " was" : "s were") +
@@ -1509,70 +1575,39 @@ void AppWindow::saveOutput(std::size_t index) {
 }
 
 void AppWindow::saveAllOutputs() {
+    if(processing)return;
     const auto folder = openFolderDialog(L"Choose where encrypted outputs will be saved");
     if (!folder) return;
 
-    std::vector<std::size_t> indices;
+    std::vector<OutputItem> work;
     {
         std::lock_guard lock(state_mutex);
-        for (std::size_t index = 0; index < outputs.size(); ++index) {
-            if (outputs[index].status == ItemStatus::PENDING_SAVE) indices.push_back(index);
-        }
+        work=outputs;
     }
-    std::size_t save_failures = 0;
-    for (const std::size_t index : indices) {
-        OutputItem item;
-        {
-            std::lock_guard lock(state_mutex);
-            item = outputs[index];
-        }
-        const std::filesystem::path destination_parent =
-            *folder / item.relative_path.parent_path();
-        const std::filesystem::path destination = uniquePath(
-            destination_parent, item.relative_path.filename());
-        const bool moved = moveStagedOutput(item.output_path, destination);
-        bool source_deleted = true;
-        if (moved && item.delete_source_after_save) source_deleted = engine.delete_file(item.source_path);
+    const auto summary=kasa::save_all_prepared(work,folder,
+        [this](const auto& parent,const auto& relative){return uniquePath(parent/relative.parent_path(),relative.filename());},
+        [this](const auto& source,const auto& target){return moveStagedOutput(source,target);},
+        [this](const auto& output){return output.source_snapshot&&engine.delete_file(output.source_path,*output.source_snapshot);});
+    {std::lock_guard lock(state_mutex);outputs.swap(work);}
 
-        {
-            std::lock_guard lock(state_mutex);
-            outputs[index].status = moved ? ItemStatus::SAVED : ItemStatus::PENDING_SAVE;
-            outputs[index].output_path = moved ? destination : item.output_path;
-            outputs[index].staged = !moved;
-            outputs[index].message = !moved
-                                         ? "Save failed. Choose another destination and try again."
-                                         : source_deleted
-                                               ? pathToUtf8(destination)
-                                               : "Saved, but the source file could not be deleted";
-        }
-        if (!moved) ++save_failures;
-    }
-
-    if (save_failures > 0) {
+    retainResultsAfterSave();
+    if (summary.failed > 0) {
         failure_modal_title = "Some files could not be saved";
-        failure_modal_message = std::to_string(save_failures) + " encrypted file" +
-                                (save_failures == 1 ? " remains" : "s remain") +
+        failure_modal_message = std::to_string(summary.failed) + " encrypted file" +
+                                (summary.failed == 1 ? " remains" : "s remain") +
                                 " ready to save. Choose another destination and try again.";
         failure_modal_pending = true;
         return;
     }
 
-    std::size_t saved_count = 0;
-    std::size_t delete_warning_count = 0;
-    {
-        std::lock_guard lock(state_mutex);
-        saved_count = outputs.size();
-        delete_warning_count = static_cast<std::size_t>(std::count_if(
-            outputs.begin(), outputs.end(), [](const OutputItem& output) {
-                return output.message == "Saved, but the source file could not be deleted";
-            }));
-    }
-    clearSession();
+    const auto saved_count=summary.saved;
+    const auto delete_warning_count=summary.delete_warnings;
+    if(saved_count==0)return;
     success_modal_title = "Files saved successfully";
     success_modal_message = std::to_string(saved_count) + " encrypted file" +
                             (saved_count == 1 ? " was" : "s were") +
                             " saved to:\n" + pathToUtf8(*folder) +
-                            "\n\nThe workspace has been cleared for the next operation.";
+                            "\n\nResults are retained, including any earlier processing errors.";
     if (delete_warning_count > 0) {
         success_modal_message += "\n\n" + std::to_string(delete_warning_count) +
                                  " source file" + (delete_warning_count == 1 ? " was" : "s were") +
@@ -1583,38 +1618,13 @@ void AppWindow::saveAllOutputs() {
 
 std::filesystem::path AppWindow::uniquePath(const std::filesystem::path& folder,
                                             const std::filesystem::path& desired_name) const {
-    std::filesystem::path candidate = folder / desired_name;
-    if (!std::filesystem::exists(candidate) && !std::filesystem::exists(candidate.string() + ".tmp")) {
-        return candidate;
-    }
-    const std::filesystem::path stem = desired_name.stem();
-    const std::filesystem::path extension = desired_name.extension();
-    for (int number = 2; number < 10000; ++number) {
-        candidate = folder / (stem.string() + " (" + std::to_string(number) + ")" + extension.string());
-        if (!std::filesystem::exists(candidate) && !std::filesystem::exists(candidate.string() + ".tmp")) {
-            return candidate;
-        }
-    }
-    return folder / (desired_name.string() + "-new");
+    return kasa::unique_output_path(folder,desired_name);
 }
 
 bool AppWindow::moveStagedOutput(const std::filesystem::path& source,
                                  const std::filesystem::path& destination) {
-    if (std::filesystem::exists(destination)) return false;
-    std::error_code error;
-    std::filesystem::create_directories(destination.parent_path(), error);
-    if (error) return false;
-
-    std::filesystem::rename(source, destination, error);
-    if (!error) return true;
-    error.clear();
-    if (!std::filesystem::copy_file(source, destination,
-                                    std::filesystem::copy_options::none, error) || error) {
-        return false;
-    }
-    std::error_code remove_error;
-    std::filesystem::remove(source, remove_error);
-    return !remove_error;
+    // Keep the staging copy until normal session cleanup, including on failures.
+    return save_verified(source, destination);
 }
 
 std::string AppWindow::formatSize(std::uintmax_t bytes) {

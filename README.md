@@ -1,5 +1,15 @@
 # KASA
 
+## 1.1.0 Test 1
+
+The redesigned interface, hardened file workflows, and authenticated read-only
+text/PNG/JPEG preview are available in the
+[1.1.0 Test 1 pre-release](https://github.com/emecyildiz/Encryption/releases/tag/v1.1.0-test.1).
+Download the Setup EXE or extract the entire portable ZIP. This is an unsigned
+test build, not a final release. Use disposable samples and keep source deletion
+disabled during testing. See the [test guide](docs/README-1.1.0-test.1.md) for
+installation, optional file association, and known acceptance-test gaps.
+
 KASA is a local-first Windows desktop application for protecting files without
 uploading them to a cloud service. It provides a focused drag-and-drop workflow,
 authenticated encryption, automatic `.kasa` format detection, and explicit
@@ -111,7 +121,7 @@ After generating the standalone Release folder, compile the Inno Setup script:
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\KASA.iss
 ```
 
-The resulting installer is written to `dist/KASA-Setup-1.0.0.exe`. See
+The current test installer is written to `dist/KASA-Setup-1.1.0-test.1.exe`. See
 `installer/README.md` for version-update instructions.
 
 ## Built with Codex
