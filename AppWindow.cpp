@@ -5,6 +5,7 @@
 #include "ui_palette.h"
 #include "output_path.h"
 #include "operation_password.h"
+#include "update_ui_policy.h"
 #include <memory>
 #include "resources/resource.h"
 
@@ -30,6 +31,13 @@
 #include <string_view>
 
 namespace {
+    bool installedUpdateLocation(){
+        wchar_t location[32768]{},module[32768]{};DWORD size=sizeof(location);
+        if(RegGetValueW(HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{8AAE51C3-BD6C-495A-A0E6-15B0BF50C4A4}_is1",L"InstallLocation",RRF_RT_REG_SZ,nullptr,location,&size)!=ERROR_SUCCESS)return false;
+        const DWORD n=GetModuleFileNameW(nullptr,module,32768);if(!n||n>=32768)return false;
+        std::error_code error;
+        return std::filesystem::equivalent(std::filesystem::path(module).parent_path(),std::filesystem::path(location),error) && !error;
+    }
     constexpr ImVec4 COLOR_ACCENT {0.16f, 0.34f, 0.57f, 1.0f};
     constexpr ImVec4 COLOR_VIOLET {0.53f, 0.66f, 0.79f, 1.0f};
     constexpr ImVec4 COLOR_PINK {0.70f, 0.70f, 0.70f, 1.0f};
@@ -275,6 +283,8 @@ namespace {
 AppWindow::AppWindow() = default;
 
 AppWindow::~AppWindow() {
+    if(installer_worker.joinable())installer_worker.join();
+    update_preparation.cancel();
     cancel_requested = true;
     if (worker.joinable()) {
         worker.join();
@@ -333,6 +343,20 @@ bool AppWindow::init() {
     glfwSetWindowUserPointer(window, this);
     glfwSetDropCallback(window, dropCallback);
     setupImGui();
+    const auto installed_version = kasa::updates::parse_version(KASA_RELEASE_VERSION);
+    update_channel = installed_version && installed_version->test ? 1 : 0;
+    DWORD preference = 1, preference_size = sizeof(preference);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Emecworks\\KASA\\Updates", L"Startup",
+            RRF_RT_REG_DWORD, nullptr, &preference, &preference_size) == ERROR_SUCCESS)
+        update_on_startup = preference != 0;
+    preference = static_cast<DWORD>(update_channel); preference_size = sizeof(preference);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Emecworks\\KASA\\Updates", L"Channel",
+            RRF_RT_REG_DWORD, nullptr, &preference, &preference_size) == ERROR_SUCCESS)
+        update_channel = preference == 1 ? 1 : 0;
+    if (update_on_startup) {
+        update_check.start(update_channel ? kasa::updates::Channel::Test : kasa::updates::Channel::Stable);
+        next_update_check = glfwGetTime() + 30;
+    }
 
     const auto session_id = std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64());
     staging_directory = std::filesystem::temp_directory_path() / "KASA" / session_id;
@@ -444,11 +468,14 @@ void AppWindow::run() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         joinFinishedWorker();
+        if(installer_ready){glfwSetWindowShouldClose(window,GLFW_TRUE);break;}
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        ImGui::BeginDisabled(installer_busy.load());
         renderUI();
+        ImGui::EndDisabled();
         ImGui::Render();
 
         int display_width = 0;
@@ -488,6 +515,11 @@ void AppWindow::renderUI() {
                 renderOutputPanel();
                 ImGui::EndTabItem();
             }
+            const auto update_status = update_check.state();
+            if (ImGui::BeginTabItem(update_status.available ? "Updates (!)###Updates" : "Updates###Updates")) {
+                renderUpdates();
+                ImGui::EndTabItem();
+            }
             ImGui::EndTabBar();
         }
         endCard();
@@ -504,6 +536,140 @@ void AppWindow::renderUI() {
 }
 
 
+
+void AppWindow::renderUpdates() {
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Application updates");
+    ImGui::Text("Installed version: %s", KASA_RELEASE_VERSION);
+    DWORD last_exit=0,exit_size=sizeof(last_exit);
+    if(RegGetValueW(HKEY_CURRENT_USER,L"Software\\Emecworks\\KASA\\Updates",L"LastInstallerExit",RRF_RT_REG_DWORD,nullptr,&last_exit,&exit_size)==ERROR_SUCCESS)
+        ImGui::Text("Last installer exit code: %lu (0 = completed)",last_exit);
+    if(installer_busy)ImGui::TextWrapped("Rechecking the locked installer and preparing to close KASA...");
+    if(installer_error)ImGui::Text("Installer handoff failed safely. Windows code: %lu",installer_error.load());
+    ImGui::Separator();
+    ImGui::TextWrapped("Checks the public Emecworks/Encryption releases on GitHub. Your files and passwords are never sent. GitHub receives normal connection information, including your IP address.");
+    auto status = update_check.state();
+    const auto preparation = update_preparation.snapshot();
+    const bool selection_locked = kasa::updates::locks_update_selection(preparation.phase);
+    const auto publisher_key = kasa::updates::parse_pinned_key(KASA_UPDATE_PUBLIC_KEY_HEX);
+    ImGui::BeginDisabled(status.busy || selection_locked);
+    bool changed = ImGui::Checkbox("Check for updates when KASA starts", &update_on_startup);
+    const bool channel_changed = ImGui::Combo("Release channel", &update_channel, "Stable releases\0Test and stable releases\0");
+    changed |= channel_changed;
+    if (channel_changed) { update_check.reset(); status = update_check.state(); }
+    if (changed) {
+        HKEY key = nullptr;
+        bool saved = false;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Emecworks\\KASA\\Updates", 0,
+                nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
+            DWORD startup = update_on_startup ? 1 : 0, channel = update_channel;
+            const auto first = RegSetValueExW(key, L"Startup", 0, REG_DWORD,
+                reinterpret_cast<const BYTE*>(&startup), sizeof(startup));
+            const auto second = RegSetValueExW(key, L"Channel", 0, REG_DWORD,
+                reinterpret_cast<const BYTE*>(&channel), sizeof(channel));
+            saved = first == ERROR_SUCCESS && second == ERROR_SUCCESS;
+            RegCloseKey(key);
+        }
+        update_settings_notice = saved ? "Update preferences saved." : "Update preferences apply to this session only; settings could not be saved.";
+    }
+    ImGui::EndDisabled();
+    if (!update_settings_notice.empty()) ImGui::TextWrapped("%s", update_settings_notice.c_str());
+    if (update_channel) ImGui::TextWrapped("Test releases may contain unfinished features. Keep independent backups of important encrypted files.");
+    ImGui::BeginDisabled(status.busy || selection_locked || glfwGetTime() < next_update_check);
+    if (ImGui::Button("Check now", ImVec2(150, 36))) {
+        update_check.start(update_channel ? kasa::updates::Channel::Test : kasa::updates::Channel::Stable);
+        next_update_check = glfwGetTime() + 30;
+    }
+    ImGui::EndDisabled();
+    if (!status.busy && glfwGetTime() < next_update_check)
+        ImGui::TextDisabled("Please wait briefly before checking again.");
+    ImGui::Spacing();
+    ImGui::TextWrapped("%s", status.message.c_str());
+    if (status.available) ImGui::Text("Available version: %s", status.version.c_str());
+    ImGui::Separator();
+    if (!publisher_key) {
+        ImGui::TextColored(COLOR_WARNING, "Update preparation is unavailable in this build.");
+        ImGui::TextWrapped("The publisher verification key has not been configured. Release checks still work; signature verification cannot be bypassed.");
+    }
+    if (status.available) {
+        const bool allowed = kasa::updates::may_prepare_update(publisher_key.has_value(),status.available,
+            status.busy,processing.load(),preparation.phase);
+        ImGui::BeginDisabled(!allowed);
+        if (ImGui::Button("Download and verify", ImVec2(200,36)) && allowed) {
+            try {
+                kasa::updates::PreparationRequest request;
+                request.installed=KASA_RELEASE_VERSION;
+                request.release=status.version;
+                request.channel=update_channel ? kasa::updates::Channel::Test : kasa::updates::Channel::Stable;
+                request.pinned_key=*publisher_key;
+                request.now=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+                request.root=std::filesystem::temp_directory_path().lexically_normal();
+                if(update_preparation.start(std::move(request))) {
+                    preparing_version=status.version;
+                    update_preparation_notice.clear();
+                } else update_preparation_notice="Could not start update preparation.";
+            } catch(...) { update_preparation_notice="The local update workspace could not be prepared."; }
+        }
+        ImGui::EndDisabled();
+        if(processing)ImGui::TextWrapped("Wait for the current file operation before preparing an update.");
+    }
+    if(!update_preparation_notice.empty())ImGui::TextWrapped("%s",update_preparation_notice.c_str());
+    using Phase=kasa::updates::PreparePhase;
+    if(preparation.phase!=Phase::Idle) {
+        ImGui::Spacing();
+        ImGui::Text("Selected update: %s",preparing_version.c_str());
+        ImGui::TextWrapped("%s",preparation.message.c_str());
+        if(preparation.total) {
+            const float progress=static_cast<float>(preparation.received)/static_cast<float>(preparation.total);
+            ImGui::ProgressBar(std::clamp(progress,0.0f,1.0f),ImVec2(-1,20));
+            ImGui::Text("%s / %s",formatSize(preparation.received).c_str(),formatSize(preparation.total).c_str());
+        }
+        if(preparation.phase==Phase::Preparing) {
+            if(ImGui::Button("Cancel download"))update_preparation.cancel();
+            ImGui::TextWrapped("Cancellation is checked between network operations and may take a few seconds.");
+          } else if(preparation.phase==Phase::Ready) {
+              bool pending=false;{std::lock_guard lock(state_mutex);pending=kasa::has_pending_outputs(outputs);}
+              ImGui::TextWrapped("The installer will close KASA after a final verification. It runs interactively; review its destination and options. Your documents are not part of the installation.");
+              ImGui::Checkbox("I approve closing KASA and starting this verified installer",&approve_install);
+              const bool installed=installedUpdateLocation();
+              const bool can_install=approve_install && !processing && !pending && !installer_busy && installed;
+              if(!installed)ImGui::TextWrapped("Automatic installer handoff is available only from an installed KASA copy. Portable/development copies can check updates; use the official setup to install.");
+              ImGui::BeginDisabled(!can_install);
+              if(ImGui::Button("Install update") && can_install){
+                  if(installer_worker.joinable())installer_worker.join();
+                  installer_busy=true;installer_error=0;
+                  try{installer_worker=std::thread([this]{
+                      try{
+                          const auto now=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+                          auto package=update_preparation.take_ready(true,false,false,now);
+                          if(!package){installer_error=ERROR_INVALID_DATA;installer_busy=false;return;}
+                          std::vector<wchar_t> module(32768);const auto n=GetModuleFileNameW(nullptr,module.data(),static_cast<DWORD>(module.size()));
+                          unsigned long error=ERROR_BAD_PATHNAME;
+                          if(n && n<module.size()){
+                              const auto helper=std::filesystem::path(std::wstring(module.data(),n)).parent_path()/std::filesystem::path("KASA-Updater-" KASA_RELEASE_VERSION ".exe");
+                              if(package->launch_helper(helper,now,error)){installer_ready=true;return;}
+                          }
+                          installer_error=error?error:ERROR_GEN_FAILURE;
+                          update_preparation.reset();
+                      }catch(...){installer_error=ERROR_GEN_FAILURE;update_preparation.reset();}
+                      installer_busy=false;
+                  });}catch(...){installer_busy=false;installer_error=ERROR_NOT_ENOUGH_MEMORY;}
+              }
+              ImGui::EndDisabled();
+              if(processing || pending)ImGui::TextWrapped("Finish the current operation and save pending Results before installing.");
+              if(ImGui::Button("Discard prepared update"))update_preparation.cancel();
+        } else if(preparation.phase==Phase::Failed || preparation.phase==Phase::Cancelled) {
+            if(preparation.http_status || preparation.system_error)
+                ImGui::Text("HTTP: %lu | Windows error: %lu",preparation.http_status,preparation.system_error);
+            if(ImGui::Button("Reset update preparation")) {
+                if(update_preparation.reset()){preparing_version.clear();update_preparation_notice.clear();}
+            }
+        }
+    }
+    ImGui::Spacing();
+    ImGui::TextWrapped("Downloading alone does not install an update. Installation requires your separate approval. If installation is cancelled, reopen the existing KASA application.");
+}
 
 void AppWindow::renderHeader() {
     const float top = ImGui::GetCursorPosY();
@@ -562,6 +728,7 @@ void AppWindow::renderSourcePanel() {
 }
 
 void AppWindow::renderSettingsPanel() {
+    bool& delete_original = source_deletion.for_mode(mode == UiMode::UNLOCK);
     beginCard("SettingsPanel", ImVec2(0, 0));
     if (heading_font) ImGui::PushFont(heading_font);
     ImGui::TextUnformatted("Operation");
@@ -571,7 +738,7 @@ void AppWindow::renderSettingsPanel() {
 
     // Keep the action button visible. Only the settings area scrolls when the
     // window is short or the advanced section is expanded.
-    const float settings_height = std::max(150.0f, ImGui::GetContentRegionAvail().y - 90.0f);
+    const float settings_height = std::max(150.0f, ImGui::GetContentRegionAvail().y - 130.0f);
     ImGui::BeginChild("SecuritySettings", ImVec2(0, settings_height), ImGuiChildFlags_None);
     ImGui::BeginDisabled(processing);
     ImGui::TextColored(COLOR_MUTED, "01  /  PASSWORD");
@@ -606,7 +773,20 @@ void AppWindow::renderSettingsPanel() {
 
     ImGui::Spacing();
     ImGui::Separator();
-    ImGui::TextColored(COLOR_MUTED, "03  /  OPTIONS");
+    ImGui::PushStyleColor(ImGuiCol_Text, COLOR_ERROR);
+    ImGui::TextUnformatted("03  /  SOURCE FILE DELETION");
+    ImGui::Checkbox("Delete source after successful save", &delete_original);
+    ImGui::TextWrapped("%s", delete_original
+        ? (mode == UiMode::UNLOCK
+            ? "ON: The .kasa source will be deleted after the decrypted file is verified and saved. The saved file is NOT encrypted."
+            : "ON: The original unencrypted source will be deleted after the encrypted file is saved.")
+        : "OFF: The source is kept. Both source and output will occupy disk space.");
+    ImGui::PopStyleColor();
+    if (delete_original) {
+        ImGui::TextWrapped("Deletion does not use the Recycle Bin. Failed files keep their sources. Changed or busy sources may be kept with a warning.");
+        ImGui::TextWrapped("Best-effort overwrite is not guaranteed secure erasure on SSDs.");
+    }
+    ImGui::Spacing();
     if (mode == UiMode::PROTECT) {
         if (ImGui::TreeNodeEx("Advanced settings", ImGuiTreeNodeFlags_SpanAvailWidth)) {
             show_advanced = true;
@@ -623,16 +803,6 @@ void AppWindow::renderSettingsPanel() {
             }
             ImGui::TreePop();
         }
-        ImGui::Checkbox("Delete source after saving", &delete_original);
-        if (delete_original) {
-            ImGui::PushStyleColor(ImGuiCol_Text, COLOR_WARNING);
-            ImGui::TextWrapped("The source is deleted only after the encrypted output is saved successfully.");
-            ImGui::PopStyleColor();
-            ImGui::TextWrapped("Sources that changed after encryption, were replaced, or are busy will be kept.");
-            ImGui::PushStyleColor(ImGuiCol_Text, COLOR_WARNING);
-            ImGui::TextWrapped("Best-effort overwrite is not guaranteed secure erasure on SSDs.");
-            ImGui::PopStyleColor();
-        }
     } else if (!keep_source_location) {
         ImGui::TextUnformatted("Decrypted file destination");
         const std::string destination = unlock_destination.empty()
@@ -643,14 +813,6 @@ void AppWindow::renderSettingsPanel() {
         if (ImGui::Button("Choose Destination")) chooseUnlockDestination();
         ImGui::EndDisabled();
     }
-    if (mode == UiMode::UNLOCK) {
-        ImGui::Checkbox("Delete encrypted source after saving", &delete_original);
-        if (delete_original) {
-            ImGui::PushStyleColor(ImGuiCol_Text, COLOR_WARNING);
-            ImGui::TextWrapped("Best-effort overwrite is not guaranteed secure erasure on SSDs.");
-            ImGui::PopStyleColor();
-        }
-    }
 
     ImGui::EndDisabled();
     if (!notice.empty()) {
@@ -658,6 +820,12 @@ void AppWindow::renderSettingsPanel() {
     }
     ImGui::EndChild();
 
+    // Keep deletion visible even when the settings card is scrolled.
+    ImGui::PushStyleColor(ImGuiCol_Text, COLOR_ERROR);
+    ImGui::TextWrapped("%s", delete_original
+        ? (mode == UiMode::UNLOCK ? "After saving: DELETE .kasa source" : "After saving: DELETE original source")
+        : "After saving: KEEP source and output");
+    ImGui::PopStyleColor();
     const bool passwords_match = mode == UiMode::UNLOCK ||
                                  std::strcmp(password.data(), password_confirmation.data()) == 0;
     bool pending_outputs = false;
@@ -1079,11 +1247,11 @@ void AppWindow::setMode(UiMode new_mode) {
     if (mode == new_mode) return;
     clearSession();
     mode = new_mode;
-    delete_original = false;
     cipher = CipherType::AES256;
 }
 
 void AppWindow::handleDroppedPaths(int count, const char** paths) {
+    if(installer_busy)return;
     if (processing) return;
     for (int index = 0; index < count; ++index) {
         addPath(pathFromUtf8(paths[index]));
@@ -1233,7 +1401,7 @@ void AppWindow::startProcessing() {
     auto password_owner = std::make_unique<OperationPassword>(password.data());
     const UiMode selected_mode = mode;
     const CipherType selected_cipher = cipher;
-    const bool should_delete = delete_original;
+    const bool should_delete = source_deletion.for_mode(mode == UiMode::UNLOCK);
     const bool preserve_location = keep_source_location;
     const std::filesystem::path destination_folder = unlock_destination;
 

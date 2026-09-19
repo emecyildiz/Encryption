@@ -1,9 +1,9 @@
 #define MyAppName "KASA"
-#define MyAppVersion "1.1.0-test.1"
+#define MyAppVersion "1.1.0-test.2"
 #define MyAppPublisher "KASA contributors"
 #define MyAppURL "https://github.com/emecyildiz/Encryption"
 #define MyAppExeName "KASA.exe"
-#define PackageDirectory "..\dist\KASA-1.1.0-test.1-windows-x64"
+#define PackageDirectory "..\dist\KASA-1.1.0-test.2-windows-x64"
 
 [Setup]
 AppId={{8AAE51C3-BD6C-495A-A0E6-15B0BF50C4A4}

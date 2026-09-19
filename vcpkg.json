@@ -13,6 +13,7 @@
         "opengl3-binding"
       ]
     },
-    "openssl"
+    "openssl",
+    "nlohmann-json"
   ]
 }

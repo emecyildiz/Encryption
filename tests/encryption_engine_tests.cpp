@@ -379,6 +379,34 @@ namespace {
     }
 }
 
+namespace {
+    bool runDeletionFailureSafety(CipherType cipher) {
+        TestWorkspace workspace;
+        encryption_engine engine;
+        const auto plain = workspace.path / "plain.bin";
+        const auto encrypted = workspace.path / "plain.kasa";
+        const auto output = workspace.path / "output.bin";
+        const std::vector<std::uint8_t> content(4096, 0x6a);
+        if (!writeBytes(plain, content) || !engine.process_file(plain, "delete-safety",
+            ActionType::ENCRYPT, cipher, false, encrypted)) return false;
+        const auto original = readBytes(encrypted);
+        if (!expect(!engine.process_file(encrypted, "wrong", ActionType::DECRYPT,
+            cipher, true, output) && readBytes(encrypted) == original &&
+            !std::filesystem::exists(output), "Delete enabled: wrong password preserves source")) return false;
+        std::filesystem::create_directory(output);
+        if (!expect(!engine.process_file(encrypted, "delete-safety", ActionType::DECRYPT,
+            cipher, true, output) && readBytes(encrypted) == original &&
+            std::filesystem::is_directory(output), "Delete enabled: output failure preserves source")) return false;
+        auto damaged = original;
+        damaged[0] ^= 0x01;
+        if (!writeBytes(encrypted, damaged)) return false;
+        const auto rejected = workspace.path / "rejected.bin";
+        return expect(!engine.process_file(encrypted, "delete-safety", ActionType::DECRYPT,
+            cipher, true, rejected) && readBytes(encrypted) == damaged &&
+            !std::filesystem::exists(rejected), "Delete enabled: tampered source is retained");
+    }
+}
+
 int main() {
     const std::vector<std::uint8_t> binary_data {
         0x00, 0x01, 0x02, 0x7f, 0x80, 0xfe, 0xff, 0x0a, 0x0d, 0x00
@@ -409,6 +437,7 @@ int main() {
     for (const auto cipher : {CipherType::AES256, CipherType::XOR}) {
         for (int scenario = 0; scenario < 5; ++scenario) passed &= runSourceSnapshotTest(cipher, scenario);
         passed &= runAutomaticDeletionTest(cipher);
+        passed &= runDeletionFailureSafety(cipher);
     }
 
     if (!passed) return 1;

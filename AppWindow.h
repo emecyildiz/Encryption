@@ -4,6 +4,9 @@
 #include <GLFW/glfw3.h>
 #include "encryption_engine.h"
 #include "batch_state.h"
+#include "source_deletion_policy.h"
+#include "update_check.h"
+#include "update_job.h"
 
 #include <array>
 #include <atomic>
@@ -64,7 +67,7 @@ private:
     CipherType cipher = CipherType::AES256;
     bool show_password = false;
     bool show_advanced = false;
-    bool delete_original = false;
+    kasa::SourceDeletionPolicy source_deletion;
     bool keep_source_location = true;
     std::array<char, 128> password {};
     std::array<char, 128> password_confirmation {};
@@ -98,6 +101,20 @@ private:
 
     void setupImGui();
     void renderUI();
+    void renderUpdates();
+    kasa::updates::UpdateCheck update_check;
+    kasa::updates::UpdatePreparation update_preparation;
+    std::string update_preparation_notice;
+    std::string preparing_version;
+    std::thread installer_worker;
+    std::atomic<bool> installer_busy{false};
+    std::atomic<bool> installer_ready{false};
+    std::atomic<unsigned long> installer_error{0};
+    bool approve_install = false;
+    int update_channel = 1;
+    bool update_on_startup = true;
+    double next_update_check = 0;
+    std::string update_settings_notice;
     bool select_results = false;
     void renderSettingsPanel();
     void renderHeader();

@@ -1,14 +1,20 @@
 # KASA
 
-## 1.1.0 Test 1
+## 1.1.0 Test A — signed updater
 
-The redesigned interface, hardened file workflows, and authenticated read-only
-text/PNG/JPEG preview are available in the
-[1.1.0 Test 1 pre-release](https://github.com/emecyildiz/Encryption/releases/tag/v1.1.0-test.1).
-Download the Setup EXE or extract the entire portable ZIP. This is an unsigned
-test build, not a final release. Use disposable samples and keep source deletion
-disabled during testing. See the [test guide](docs/README-1.1.0-test.1.md) for
-installation, optional file association, and known acceptance-test gaps.
+[Download Test A](https://github.com/emecyildiz/Encryption/releases/tag/v1.1.0-test.2)
+and install the Setup EXE to test the user-approved update flow. Test B will be
+published only after Test A installation is confirmed. Updates use signed
+metadata, bounded downloads and locked installer handoff; installation is never
+automatic without approval. Portable copies can check releases but do not invoke
+the installer automatically. See [the Test A guide](docs/README-TEST-A.md).
+
+This is an unsigned Windows prerelease, not a final release or independent
+security audit. Internal update signatures do not remove SmartScreen warnings.
+Use disposable samples. Decryption source deletion is ON by default after
+successful saving; encryption source deletion remains OFF. Review the red
+warnings and turn deletion off when you want to retain encrypted originals.
+The new default `.kasa` association is intentionally reserved for Test B.
 
 KASA is a local-first Windows desktop application for protecting files without
 uploading them to a cloud service. It provides a focused drag-and-drop workflow,
@@ -67,7 +73,7 @@ development build as the only copy of irreplaceable data.
 - [vcpkg](https://github.com/microsoft/vcpkg)
 
 The repository contains a `vcpkg.json` manifest for OpenSSL, Dear ImGui, GLFW,
-and GLEW.
+GLEW, and nlohmann-json. Publisher/test utilities are not user-distribution files.
 
 ```powershell
 cmake -S . -B build `

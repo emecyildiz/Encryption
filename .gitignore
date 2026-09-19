@@ -10,6 +10,10 @@
 # Local release packages
 /dist/
 
+# Publisher secrets/backups must remain outside the repository.
+*.dpapi
+*.pem
+
 # Generated binaries and libraries
 *.exe
 *.dll

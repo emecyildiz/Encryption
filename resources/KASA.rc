@@ -16,11 +16,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "KASA contributors\0"
             VALUE "FileDescription", "KASA local file protection - test build\0"
-            VALUE "FileVersion", "1.1.0-test.1\0"
+            VALUE "FileVersion", "1.1.0-test.2\0"
             VALUE "InternalName", "KASA\0"
             VALUE "OriginalFilename", "KASA.exe\0"
             VALUE "ProductName", "KASA\0"
-            VALUE "ProductVersion", "1.1.0-test.1\0"
+            VALUE "ProductVersion", "1.1.0-test.2\0"
         END
     END
     BLOCK "VarFileInfo"
