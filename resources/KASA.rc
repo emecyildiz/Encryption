@@ -3,8 +3,8 @@
 IDI_KASA_ICON ICON "KASA.ico"
 
 1 VERSIONINFO
-FILEVERSION 1,1,0,0
-PRODUCTVERSION 1,1,0,0
+FILEVERSION 1,1,0,3
+PRODUCTVERSION 1,1,0,3
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x2L
 FILEOS 0x40004L
@@ -16,11 +16,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "KASA contributors\0"
             VALUE "FileDescription", "KASA local file protection - test build\0"
-            VALUE "FileVersion", "1.1.0-test.2\0"
+            VALUE "FileVersion", "1.1.0-test.3\0"
             VALUE "InternalName", "KASA\0"
             VALUE "OriginalFilename", "KASA.exe\0"
             VALUE "ProductName", "KASA\0"
-            VALUE "ProductVersion", "1.1.0-test.2\0"
+            VALUE "ProductVersion", "1.1.0-test.3\0"
         END
     END
     BLOCK "VarFileInfo"

@@ -12,5 +12,6 @@ int main(){
  using namespace kasa::ui;
  for(auto bg:{primary,primary_hover,primary_active})check(on_primary,bg);
  for(auto bg:{secondary,secondary_hover,secondary_active})check(on_secondary,bg);
+ check(on_secondary,popup_surface);
  std::cout<<checks<<" checks, "<<failures<<" failures\n";return failures?1:0;
 }

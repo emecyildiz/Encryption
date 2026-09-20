@@ -9,4 +9,5 @@ inline constexpr Rgb secondary{0.90f,0.93f,0.96f};
 inline constexpr Rgb secondary_hover{0.80f,0.86f,0.93f};
 inline constexpr Rgb secondary_active{0.70f,0.78f,0.87f};
 inline constexpr Rgb on_secondary{0.13f,0.17f,0.22f};
+inline constexpr Rgb popup_surface{1.0f,1.0f,1.0f};
 }

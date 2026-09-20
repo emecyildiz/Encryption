@@ -439,6 +439,8 @@ void AppWindow::setupImGui() {
     style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.50f,0.54f,0.58f,1);
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.95f,0.96f,0.97f,1);
     style.Colors[ImGuiCol_ChildBg] = ImVec4(1,1,1,1);
+    // Combo menus use PopupBg, not ChildBg. Keep it opaque for dark text.
+    style.Colors[ImGuiCol_PopupBg] = rgba(kasa::ui::popup_surface);
     style.Colors[ImGuiCol_Border] = ImVec4(0.85f,0.87f,0.90f,1);
     style.Colors[ImGuiCol_FrameBg] = ImVec4(0.94f,0.95f,0.96f,1);
     style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.88f,0.91f,0.94f,1);
