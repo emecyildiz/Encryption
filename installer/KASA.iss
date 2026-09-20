@@ -1,10 +1,10 @@
 #define MyAppName "KASA"
-#define MyAppVersion "1.1.0-test.3"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "KASA contributors"
 #define MyAppURL "https://github.com/emecyildiz/Encryption"
 #define MyAppExeName "KASA.exe"
 #ifndef PackageDirectory
-#define PackageDirectory "..\dist\KASA-1.1.0-test.3-windows-x64"
+#define PackageDirectory "..\dist\KASA-1.1.0-windows-x64"
 #endif
 
 [Setup]
@@ -36,13 +36,13 @@ CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName}
 RestartApplications=no
 SetupLogging=yes
-VersionInfoVersion=1.1.0.3
+VersionInfoVersion=1.1.0.0
 ChangesAssociations=yes
 UsePreviousTasks=yes
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=KASA local file protection installer
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.1.0.3
+VersionInfoProductVersion=1.1.0.0
 VersionInfoCopyright=Copyright (c) 2026 KASA contributors
 
 [Languages]

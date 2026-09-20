@@ -1,23 +1,25 @@
 # KASA
 
-## 1.1.0 Test B — association and update menu
+## KASA 1.1.0 — current stable release
 
-[Test B release](https://github.com/emecyildiz/Encryption/releases/tag/v1.1.0-test.3).
-If Test A is already installed, use Updates > Test and stable releases > Check now
-to test the A-to-B update flow instead of installing B manually. Updates use signed
+[Download KASA 1.1.0](https://github.com/emecyildiz/Encryption/releases/tag/v1.1.0).
+Choose the Setup EXE for installation. Existing update-aware versions can use
+Updates > Check now. Version 1.0.0 users must download the new installer. Updates use signed
 metadata, bounded downloads and locked installer handoff; installation is never
 automatic without approval. Portable copies can check releases but do not invoke
-the installer automatically. See [the Test B guide](README-TEST-B.md).
+the installer automatically. See [release notes](RELEASE-NOTES-1.1.0.md).
 
-This is an unsigned Windows prerelease, not a final release or independent
+This is a Windows release without Authenticode signing or an independent
 security audit. Internal update signatures do not remove SmartScreen warnings.
 Use disposable samples. Decryption source deletion is ON by default after
 successful saving; encryption source deletion remains OFF. Review the red
 warnings and turn deletion off when you want to retain encrypted originals.
-Test B selects the Recommended `.kasa` association on fresh installs, preserves
+KASA selects the Recommended `.kasa` association on fresh installs, preserves
 previous choices on upgrade, and fixes release-channel popup contrast. Existing
-Windows default-app choices are not overridden. GUI and A-to-B acceptance testing
-is still pending; the reported brief first-open delay is not fixed in this build.
+Windows default-app choices are not overridden. The user confirmed A-to-B update
+installation. The reported brief first-open delay is not fixed in this build.
+Updates still show the regular installation wizard; a streamlined updater and
+an in-app What's New screen are planned, not included in 1.1.0.
 
 KASA is a local-first Windows desktop application for protecting files without
 uploading them to a cloud service. It provides a focused drag-and-drop workflow,
