@@ -96,12 +96,17 @@ private:
     std::string success_modal_title;
     std::string success_modal_message;
     bool mixed_folder_modal_pending = false;
+    bool retention_modal_pending = false;
+    bool retention_modal_active = false;
     std::vector<PendingPath> pending_regular_files;
     std::vector<PendingPath> pending_kasa_files;
 
     void setupImGui();
     void renderUI();
     void renderUpdates();
+    void renderWhatsNew();
+    bool whats_new_pending = false;
+    std::string whats_new_notice;
     kasa::updates::UpdateCheck update_check;
     kasa::updates::UpdatePreparation update_preparation;
     std::string update_preparation_notice;
@@ -124,6 +129,7 @@ private:
     void renderOutputList();
     void renderFailureModal();
     void renderSuccessModal();
+    void renderRetentionModal();
     void renderMixedFolderModal();
 
     void setMode(UiMode new_mode);
@@ -132,7 +138,7 @@ private:
                  std::filesystem::path relative_path = {});
     void clearSession();
     void retainResultsAfterSave();
-    void startProcessing();
+    void startProcessing(bool retention_confirmed = false);
     void joinFinishedWorker();
 
     void chooseFiles();

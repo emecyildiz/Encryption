@@ -1,5 +1,15 @@
 # KASA
 
+An Emecworks application, developed by Emeç Yıldız.
+
+## KASA 1.2.0 — pre-release for testing
+
+The 1.2.0 acceptance build is a pre-release; it does not replace stable 1.1.0.
+[Download the pre-release](https://github.com/emecyildiz/Encryption/releases/tag/v1.2.0).
+See [release notes](RELEASE-NOTES-1.2.0.md) for source-retention confirmation,
+simplified updates, offline release notes and the Emecworks installation folder.
+Final installer/UI acceptance remains pending. Use disposable samples first.
+
 ## KASA 1.1.0 — current stable release
 
 [Download KASA 1.1.0](https://github.com/emecyildiz/Encryption/releases/tag/v1.1.0).

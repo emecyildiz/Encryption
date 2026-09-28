@@ -6,6 +6,7 @@
 #include "output_path.h"
 #include "operation_password.h"
 #include "update_ui_policy.h"
+#include "whats_new.h"
 #include <memory>
 #include "resources/resource.h"
 
@@ -343,6 +344,16 @@ bool AppWindow::init() {
     glfwSetWindowUserPointer(window, this);
     glfwSetDropCallback(window, dropCallback);
     setupImGui();
+    char acknowledged_version[128]{};
+    DWORD acknowledged_size = sizeof(acknowledged_version);
+    const auto notes_read = RegGetValueA(HKEY_CURRENT_USER,
+        "Software\\Emecworks\\KASA\\Updates", "AcknowledgedReleaseNotes",
+        RRF_RT_REG_SZ, nullptr, acknowledged_version, &acknowledged_size);
+    const bool notes_readable = notes_read == ERROR_SUCCESS || notes_read == ERROR_FILE_NOT_FOUND;
+    whats_new_pending = kasa::release_notes::should_show(KASA_RELEASE_VERSION,
+        notes_read == ERROR_SUCCESS ? acknowledged_version : "", notes_readable);
+    if (!notes_readable)
+        whats_new_notice = "Release-note preferences could not be read. You can still open What's new below.";
     const auto installed_version = kasa::updates::parse_version(KASA_RELEASE_VERSION);
     update_channel = installed_version && installed_version->test ? 1 : 0;
     DWORD preference = 1, preference_size = sizeof(preference);
@@ -533,16 +544,63 @@ void AppWindow::renderUI() {
     ImGui::TextColored(COLOR_MUTED, "Processed on this device  /  Folder sync and backup settings still apply");
     renderFailureModal();
     renderSuccessModal();
+    renderRetentionModal();
     renderMixedFolderModal();
+    renderWhatsNew();
     ImGui::End();
 }
 
+void AppWindow::renderWhatsNew() {
+    // Open at the main-window scope even when requested inside the Updates tab.
+    if (whats_new_pending && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        ImGui::OpenPopup("What's new in KASA");
+        whats_new_pending = false;
+    }
+    const auto& io = ImGui::GetIO();
+    ImGui::SetNextWindowSize(ImVec2(std::min(640.0f, io.DisplaySize.x - 40.0f),
+        std::min(540.0f, io.DisplaySize.y - 60.0f)), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+        ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("What's new in KASA", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::Text("Installed build: %s", KASA_RELEASE_VERSION);
+        ImGui::TextUnformatted("Emecworks / KASA");
+        ImGui::Separator();
+        ImGui::BeginChild("ReleaseNoteContent", ImVec2(0, -52), false);
+        for (const auto& entry : kasa::release_notes::entries) {
+            ImGui::Spacing();
+            if (entry.important) ImGui::TextColored(COLOR_WARNING, "IMPORTANT");
+            ImGui::TextWrapped("%s", entry.title);
+            ImGui::TextWrapped("%s", entry.body);
+            ImGui::Spacing();
+            ImGui::Separator();
+        }
+        ImGui::EndChild();
+        if (ImGui::Button("Got it", ImVec2(140, 36))) {
+            HKEY key = nullptr;
+            bool saved = false;
+            if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Emecworks\\KASA\\Updates",
+                    0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
+                const char version[] = KASA_RELEASE_VERSION;
+                saved = RegSetValueExA(key, "AcknowledgedReleaseNotes", 0, REG_SZ,
+                    reinterpret_cast<const BYTE*>(version), sizeof(version)) == ERROR_SUCCESS;
+                RegCloseKey(key);
+            }
+            whats_new_notice = saved ? "Release notes acknowledged for this version."
+                : "The release-note preference could not be saved; this page may appear at the next launch.";
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SetItemDefaultFocus();
+        ImGui::EndPopup();
+    }
+}
 
 
 void AppWindow::renderUpdates() {
     ImGui::Spacing();
     ImGui::TextUnformatted("Application updates");
     ImGui::Text("Installed version: %s", KASA_RELEASE_VERSION);
+    if (ImGui::Button("What's new")) whats_new_pending = true;
+    if (!whats_new_notice.empty()) ImGui::TextWrapped("%s", whats_new_notice.c_str());
     DWORD last_exit=0,exit_size=sizeof(last_exit);
     if(RegGetValueW(HKEY_CURRENT_USER,L"Software\\Emecworks\\KASA\\Updates",L"LastInstallerExit",RRF_RT_REG_DWORD,nullptr,&last_exit,&exit_size)==ERROR_SUCCESS)
         ImGui::Text("Last installer exit code: %lu (0 = completed)",last_exit);
@@ -632,7 +690,7 @@ void AppWindow::renderUpdates() {
             ImGui::TextWrapped("Cancellation is checked between network operations and may take a few seconds.");
           } else if(preparation.phase==Phase::Ready) {
               bool pending=false;{std::lock_guard lock(state_mutex);pending=kasa::has_pending_outputs(outputs);}
-              ImGui::TextWrapped("The installer will close KASA after a final verification. It runs interactively; review its destination and options. Your documents are not part of the installation.");
+              ImGui::TextWrapped("After final verification, KASA will close and update in its current installation folder. Your installation choices are reused; progress and errors remain visible. KASA reopens after a successful update unless Windows requires a restart. Your documents are not part of the installation.");
               ImGui::Checkbox("I approve closing KASA and starting this verified installer",&approve_install);
               const bool installed=installedUpdateLocation();
               const bool can_install=approve_install && !processing && !pending && !installer_busy && installed;
@@ -1253,6 +1311,7 @@ void AppWindow::setMode(UiMode new_mode) {
 }
 
 void AppWindow::handleDroppedPaths(int count, const char** paths) {
+    if (retention_modal_active) return;
     if(installer_busy)return;
     if (processing) return;
     for (int index = 0; index < count; ++index) {
@@ -1386,7 +1445,40 @@ void AppWindow::retainResultsAfterSave() {
     select_results = true;
 }
 
-void AppWindow::startProcessing() {
+void AppWindow::renderRetentionModal() {
+    if (retention_modal_pending) {
+        ImGui::OpenPopup("Keep source files?");
+        retention_modal_pending = false;
+    }
+    ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Keep source files?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 470.0f);
+        ImGui::TextColored(COLOR_WARNING, "Source deletion is OFF");
+        ImGui::TextWrapped("%s", mode == UiMode::PROTECT
+            ? "Your original unencrypted files will remain alongside the new encrypted copies. The originals will still be readable without a password."
+            : "Your encrypted .kasa files will remain alongside the new decrypted copies. The decrypted copies will be readable without a password.");
+        ImGui::TextWrapped("Selected files: %zu. Each successful file can add one output while its source is kept. This uses additional disk space and may make the files harder to distinguish.", sources.size());
+        ImGui::TextWrapped("%s", keep_source_location
+            ? "Outputs will be saved next to their sources, so both versions will share the same folders."
+            : "Both versions will remain, even when you save outputs in a separate destination.");
+        ImGui::TextWrapped("Keep both versions? Go back to review your source-deletion choice. KASA will not enable deletion automatically.");
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button("Go back") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            retention_modal_active = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SetItemDefaultFocus();
+        ImGui::SameLine();
+        if (ImGui::Button("Continue keeping sources")) {
+            retention_modal_active = false;
+            ImGui::CloseCurrentPopup();
+            startProcessing(true);
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void AppWindow::startProcessing(bool retention_confirmed) {
     if (processing) return;
     if (worker.joinable()) worker.join();
     {
@@ -1398,6 +1490,12 @@ void AppWindow::startProcessing() {
         }
     }
     if (sources.empty() || password[0] == '\0') return;
+    if (kasa::needs_source_retention_confirmation(
+            source_deletion.for_mode(mode == UiMode::UNLOCK), retention_confirmed)) {
+        retention_modal_pending = true;
+        retention_modal_active = true;
+        return;
+    }
     try {
     std::vector<SourceItem> work_items = sources;
     auto password_owner = std::make_unique<OperationPassword>(password.data());

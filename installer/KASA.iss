@@ -1,10 +1,10 @@
-#define MyAppName "KASA"
-#define MyAppVersion "1.1.0"
-#define MyAppPublisher "KASA contributors"
+﻿#define MyAppName "KASA"
+#define MyAppVersion "1.2.0"
+#define MyAppPublisher "Emecworks"
 #define MyAppURL "https://github.com/emecyildiz/Encryption"
 #define MyAppExeName "KASA.exe"
 #ifndef PackageDirectory
-#define PackageDirectory "..\dist\KASA-1.1.0-windows-x64"
+#define PackageDirectory "..\dist\KASA-1.2.0-windows-x64"
 #endif
 
 [Setup]
@@ -16,7 +16,7 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultDirName={localappdata}\Emecworks\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
@@ -36,14 +36,16 @@ CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName}
 RestartApplications=no
 SetupLogging=yes
-VersionInfoVersion=1.1.0.0
+VersionInfoVersion=1.2.0.0
 ChangesAssociations=yes
 UsePreviousTasks=yes
+UsePreviousAppDir=yes
+UsePreviousGroup=yes
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=KASA local file protection installer
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.1.0.0
-VersionInfoCopyright=Copyright (c) 2026 KASA contributors
+VersionInfoProductVersion=1.2.0.0
+VersionInfoCopyright=Copyright (c) 2026 Emeç Yıldız
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -72,6 +74,38 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 
 [Code]
 #include "association_policy.iss"
+var
+  UpdateMode: Boolean;
+  PreviousInstallDir: String;
+
+function InitializeSetup: Boolean;
+begin
+  UpdateMode := ExpandConstant('{param:KASAUPDATE|0}') = '1';
+  Result := True;
+  if UpdateMode then
+  begin
+    { This is a UX mode, not authentication. The parent verifies the package. }
+    Result := WizardSilent and
+      RegQueryStringValue(HKCU,
+        'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8AAE51C3-BD6C-495A-A0E6-15B0BF50C4A4}_is1',
+        'InstallLocation', PreviousInstallDir);
+    if Result then
+      Result := (PreviousInstallDir <> '') and
+        FileExists(AddBackslash(PreviousInstallDir) + 'KASA.exe');
+    if not Result then
+      MsgBox('An existing KASA installation is required for this update. Run the installer normally to install or repair KASA.', mbError, MB_OK);
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if UpdateMode and
+    (CompareText(AddBackslash(ExpandFileName(WizardDirValue)),
+      AddBackslash(ExpandFileName(PreviousInstallDir))) <> 0) then
+    Result := 'The update destination differs from the existing KASA installation. No update was performed.';
+end;
+
 function CanRegisterKasaDefault: Boolean;
 begin
   { Preserve even an empty/non-string existing value rather than replacing it. }

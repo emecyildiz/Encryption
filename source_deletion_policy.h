@@ -1,6 +1,9 @@
 #pragma once
 
 namespace kasa {
+constexpr bool needs_source_retention_confirmation(bool delete_source, bool confirmed) {
+    return !delete_source && !confirmed;
+}
 // Session-local choices stay independent when automatic file detection changes mode.
 struct SourceDeletionPolicy {
     bool encrypt = false;
