@@ -1,10 +1,10 @@
-﻿#define MyAppName "KASA"
-#define MyAppVersion "1.2.0"
+#define MyAppName "KASA"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "Emecworks"
 #define MyAppURL "https://github.com/emecyildiz/Encryption"
 #define MyAppExeName "KASA.exe"
 #ifndef PackageDirectory
-#define PackageDirectory "..\dist\KASA-1.2.0-windows-x64"
+#define PackageDirectory "..\dist\KASA-1.2.1-windows-x64"
 #endif
 
 [Setup]
@@ -36,7 +36,7 @@ CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName}
 RestartApplications=no
 SetupLogging=yes
-VersionInfoVersion=1.2.0.0
+VersionInfoVersion=1.2.1.0
 ChangesAssociations=yes
 UsePreviousTasks=yes
 UsePreviousAppDir=yes
@@ -44,7 +44,7 @@ UsePreviousGroup=yes
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=KASA local file protection installer
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.2.0.0
+VersionInfoProductVersion=1.2.1.0
 VersionInfoCopyright=Copyright (c) 2026 Emeç Yıldız
 
 [Languages]

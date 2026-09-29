@@ -561,11 +561,17 @@ void AppWindow::renderWhatsNew() {
         std::min(540.0f, io.DisplaySize.y - 60.0f)), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
         ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("What's new in KASA", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+    pushModalStyle();
+    if (ImGui::BeginPopupModal("What's new in KASA", nullptr,
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
+        drawModalAccent(rgba(kasa::ui::primary));
+        ImGui::TextUnformatted("What's new in KASA");
         ImGui::Text("Installed build: %s", KASA_RELEASE_VERSION);
         ImGui::TextUnformatted("Emecworks / KASA");
         ImGui::Separator();
-        ImGui::BeginChild("ReleaseNoteContent", ImVec2(0, -52), false);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 12.0f));
+        ImGui::BeginChild("ReleaseNoteContent", ImVec2(0, -52), ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::PopStyleVar();
         for (const auto& entry : kasa::release_notes::entries) {
             ImGui::Spacing();
             if (entry.important) ImGui::TextColored(COLOR_WARNING, "IMPORTANT");
@@ -592,6 +598,7 @@ void AppWindow::renderWhatsNew() {
         ImGui::SetItemDefaultFocus();
         ImGui::EndPopup();
     }
+    popModalStyle();
 }
 
 
@@ -1451,8 +1458,12 @@ void AppWindow::renderRetentionModal() {
         retention_modal_pending = false;
     }
     ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Keep source files?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 470.0f);
+    pushModalStyle();
+    if (ImGui::BeginPopupModal("Keep source files?", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        drawModalAccent(COLOR_WARNING);
+        ImGui::TextUnformatted("Keep source files?");
+        ImGui::PushTextWrapPos(0.0f);
         ImGui::TextColored(COLOR_WARNING, "Source deletion is OFF");
         ImGui::TextWrapped("%s", mode == UiMode::PROTECT
             ? "Your original unencrypted files will remain alongside the new encrypted copies. The originals will still be readable without a password."
@@ -1476,6 +1487,7 @@ void AppWindow::renderRetentionModal() {
         }
         ImGui::EndPopup();
     }
+    popModalStyle();
 }
 
 void AppWindow::startProcessing(bool retention_confirmed) {
